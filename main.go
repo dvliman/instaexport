@@ -2,27 +2,27 @@ package main
 
 import (
   //"encoding/json"
-  "fmt"
   "log"
   "net/url"
   "net/http"
-  //"io/ioutil"
+  "io/ioutil"
   "html/template"
 )
 
 const (
   client_id        = "222c75b62b6c4a0b8b789cbaebf75375"
   client_secret    = "589eaa6bc7704eb7add52fcd229c463e"
-
   redirect_url     = "http://localhost:9999/callback"
+
   access_token_url = "https://api.instagram.com/oauth/access_token"
 )
 
 func main() {
   http.HandleFunc("/", root)
   http.HandleFunc("/callback", callback)
+  
   err := http.ListenAndServe(":9999", nil)
-  fmt.Println("Server started: listening on 9999")
+  log.Println("Server started: listening on 9999")
 
   if err != nil {
     log.Fatal(err)
@@ -51,7 +51,7 @@ func callback(w http.ResponseWriter, r *http.Request) {
   payload.Set("redirect_uri", redirect_url)
   payload.Set("code", code)
   
-  fmt.Println("exchanging authorization code for access token")
+  log.Println("exchanging authorization code: ", code)
 
   resp, err := http.PostForm(access_token_url, payload)
   if err != nil {
@@ -59,7 +59,9 @@ func callback(w http.ResponseWriter, r *http.Request) {
   }
 
   defer resp.Body.Close()
-  fmt.Sprintf("%b", resp)
+  content, err := ioutil.ReadAll(resp.Body)
+  token := string(content)
+  log.Println("received access token: ", token)
 }
 
 
@@ -68,6 +70,18 @@ type Client struct {
   user_agent    string
   access_token  string
 }
+
+// {
+//     "access_token": "23568145.222c75b.09b3dfca7d1c4dbc8ee0259a3b4ce41e",
+//     "user": {
+//         "username": "dvliman",
+//         "bio": "all pictures are taken with iphone5",
+//         "website": "http://davidliman.com",
+//         "profile_picture": "http://images.ak.instagram.com/profiles/profile_23568145_75sq_1372927594.jpg",
+//         "full_name": "David Liman",
+//         "id": "23568145"
+//     }
+// }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
 //   access_token :  a valid access token.
