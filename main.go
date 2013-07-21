@@ -1,12 +1,12 @@
 package main
 
 import (
-  //"encoding/json"
   "log"
   "net/url"
   "net/http"
   "io/ioutil"
   "html/template"
+  "encoding/json"
 )
 
 const (
@@ -20,13 +20,7 @@ const (
 func main() {
   http.HandleFunc("/", root)
   http.HandleFunc("/callback", callback)
-  
-  err := http.ListenAndServe(":9999", nil)
-  log.Println("Server started: listening on 9999")
-
-  if err != nil {
-    log.Fatal(err)
-  }
+  log.Fatal(http.ListenAndServe(":9999", nil))
 }
 
 func root(w http.ResponseWriter, r *http.Request) {
@@ -59,47 +53,52 @@ func callback(w http.ResponseWriter, r *http.Request) {
   }
 
   defer resp.Body.Close()
-  content, err := ioutil.ReadAll(resp.Body)
-  token := string(content)
-  log.Println("received access token: ", token)
+
+  stream, err := ioutil.ReadAll(resp.Body)
+  if err != nil {
+    http.Error(w, err.Error(), http.StatusInternalServerError)
+  }
+
+  var oauth Token
+  json.Unmarshal(stream, &oauth)
+
+  access_token := oauth.AccessToken
+  full_name    := oauth.User.FullName
+
+  log.Println("access token: ", access_token)
+  log.Println("full name: ", full_name)
 }
 
 
-type Client struct {
-  client        *http.Client
-  user_agent    string
-  access_token  string
+type Token struct {
+  AccessToken       string  `json:"access_token"`
+  User struct {
+    Username        string  `json:"username"`
+    Bio             string  `json:"bio"`
+    Website         string  `json:"website"`
+    ProfilePicture  string  `json:"profile_picture"`
+    FullName        string  `json:"full_name"`
+    Id              string  `json:"id"`
+  }
 }
-
-// {
-//     "access_token": "23568145.222c75b.09b3dfca7d1c4dbc8ee0259a3b4ce41e",
-//     "user": {
-//         "username": "dvliman",
-//         "bio": "all pictures are taken with iphone5",
-//         "website": "http://davidliman.com",
-//         "profile_picture": "http://images.ak.instagram.com/profiles/profile_23568145_75sq_1372927594.jpg",
-//         "full_name": "David Liman",
-//         "id": "23568145"
-//     }
-// }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
 //   access_token :  a valid access token.
 //   count        :  count of media to return.
 //   max_like_id  :  return media liked before this id
-func (c *Client) user_liked_media() {
-  // likes = "/api.instagram.com/v1/users/self/media/liked"
-  // url := fmt.Sprintf(likes + "?access_token=%s", token)
+// func (c *Client) user_liked_media() {
+//   likes = "/api.instagram.com/v1/users/self/media/liked"
+//   url := fmt.Sprintf(likes + "?access_token=%s", token)
 
-  // resp, err := http.Get(url)
+//   resp, err := http.Get(url)
 
 
-  // defer resp.Body.Close()
+//   defer resp.Body.Close()
 
-  // r := new(response)
-  // err = json.NewDecoder(resp.Body).Decode(r)
-}
+//   r := new(response)
+//   err = json.NewDecoder(resp.Body).Decode(r)
+// }
 
-func (c *Client) fetch(url string) {
+// func (c *Client) fetch(url string) {
 
-}
+// }
