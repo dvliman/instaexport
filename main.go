@@ -15,7 +15,12 @@ const (
   redirect_url     = "http://localhost:9999/callback"
 
   access_token_url = "https://api.instagram.com/oauth/access_token"
+  media_liked_url  = "https://api.instagram.com/v1/users/self/media/liked"
 )
+
+// holds access token in memory
+// used to check if request has been authenticated before
+var tokens map[string]string
 
 func main() {
   http.HandleFunc("/", root)
@@ -45,7 +50,7 @@ func callback(w http.ResponseWriter, r *http.Request) {
   payload.Set("redirect_uri", redirect_url)
   payload.Set("code", code)
   
-  log.Println("exchanging authorization code: ", code)
+  log.Println("authorization code: ", code)
 
   resp, err := http.PostForm(access_token_url, payload)
   if err != nil {
@@ -69,7 +74,6 @@ func callback(w http.ResponseWriter, r *http.Request) {
   log.Println("full name: ", full_name)
 }
 
-
 type Token struct {
   AccessToken       string  `json:"access_token"`
   User struct {
@@ -80,6 +84,27 @@ type Token struct {
     FullName        string  `json:"full_name"`
     Id              string  `json:"id"`
   }
+}
+
+type APIResponse {
+  Pagination Pagination
+  Meta       Meta
+  Data       []Data
+}
+
+type Pagination struct {
+  NextURL        string  `json:"next_url"`
+  NextMaxLikeId  string  `json:"next_max_like_id"`
+}
+
+type Meta struct {
+  Code          string  `json:"code"`
+  ErrorType     string  `json:"error_type,omitempty"`
+  ErrorMessage  string  `json:"error_message,omitempty"`
+}
+
+type Data struct {
+  Images Images   `json:"images"`
 }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
