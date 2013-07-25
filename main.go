@@ -46,9 +46,8 @@ type CustomError struct {
 
 func root(w http.ResponseWriter, r *http.Request) *CustomError{
   t, _ := template.ParseFiles("index.html")
-  var p struct{}
-  
-  if err := t.Execute(w, p); err != nil {
+
+  if err := t.Execute(w, nil); err != nil {
     return &CustomError{err, "Could not parse template", 500}
   }
   return nil
