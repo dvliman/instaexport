@@ -18,28 +18,44 @@ const (
   media_liked_url  = "https://api.instagram.com/v1/users/self/media/liked"
 )
 
-// holds access token in memory
-// used to check if request has been authenticated before
-var tokens map[string]string
-
 func main() {
-  http.HandleFunc("/", root)
-  http.HandleFunc("/callback", callback)
+  http.Handle("/", safe(root))
+  http.Handle("/callback", safe(callback))
   log.Fatal(http.ListenAndServe(":9999", nil))
 }
 
-func root(w http.ResponseWriter, r *http.Request) {
+// a "safe" http.Handle that can catch user thrown error
+// To be used with http.Handle instead of http.HandleFunc
+type safe func(http.ResponseWriter, *http.Request) *CustomError
+
+func (fn safe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+  if e := fn(w, r); e != nil {
+    log.Printf("%v", e.Error)
+    http.Error(w, e.Message, e.Code)
+  }
+}
+
+// custom error type that allows us to
+// record the full error in the log and
+// at the same time, display nice message to the user
+type CustomError struct {
+  Error   error
+  Message string
+  Code    int
+}
+
+func root(w http.ResponseWriter, r *http.Request) *CustomError{
   t, _ := template.ParseFiles("index.html")
   var p struct{}
   
   if err := t.Execute(w, p); err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
-    return
+    return &CustomError{err, "Could not parse template", 500}
   }
+  return nil
 }
 
 // oauth dance: http://instagram.com/developer/authentication/
-func callback(w http.ResponseWriter, r *http.Request) {
+func callback(w http.ResponseWriter, r *http.Request) *CustomError{
   var qs = r.URL.Query()
   var code = qs.Get("code")
 
@@ -54,14 +70,14 @@ func callback(w http.ResponseWriter, r *http.Request) {
 
   resp, err := http.PostForm(access_token_url, payload)
   if err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
+    return &CustomError{err, "Could not get access token from Instagram", 500}
   }
 
   defer resp.Body.Close()
 
   stream, err := ioutil.ReadAll(resp.Body)
   if err != nil {
-    http.Error(w, err.Error(), http.StatusInternalServerError)
+    return &CustomError{err, "Could not parse response received from Instagram", 500}
   }
 
   var oauth Token
@@ -72,6 +88,7 @@ func callback(w http.ResponseWriter, r *http.Request) {
 
   log.Println("access token: ", access_token)
   log.Println("full name: ", full_name)
+  return nil
 }
 
 type Token struct {
@@ -86,7 +103,7 @@ type Token struct {
   }
 }
 
-type APIResponse {
+type APIResponse struct {
   Pagination Pagination
   Meta       Meta
   Data       []Data
@@ -104,7 +121,7 @@ type Meta struct {
 }
 
 type Data struct {
-  Images Images   `json:"images"`
+  //Images Images   `json:"images"`
 }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
