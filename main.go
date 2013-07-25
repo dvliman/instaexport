@@ -24,7 +24,7 @@ func main() {
   log.Fatal(http.ListenAndServe(":9999", nil))
 }
 
-// a "safe" http.Handle that can catch user thrown error
+// a "safe" http.Handle that can catch app specific error
 // To be used with http.Handle instead of http.HandleFunc
 type safe func(http.ResponseWriter, *http.Request) *CustomError
 
