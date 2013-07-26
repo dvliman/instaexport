@@ -10,6 +10,10 @@ import (
   "encoding/json"
 )
 
+// todo 
+// var config struct {
+//  
+// }
 const (
   client_id        = "222c75b62b6c4a0b8b789cbaebf75375"
   client_secret    = "589eaa6bc7704eb7add52fcd229c463e"
@@ -89,7 +93,8 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError{
   log.Println("access token: ", access_token)
   log.Println("full name: ", full_name)
 
-  get_likes(access_token)
+  candidates, _ := get_likes("", access_token)
+  log.Println(candidates)
   return nil
 }
 
@@ -137,20 +142,8 @@ type Resolution struct {
 }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
-//   access_token :  a valid access token.
-//   count        :  count of media to return.
-//   max_like_id  :  return media liked before this id
-func get_likes(access_token string) ([]string, *CustomError){
-  result := []string{}
-  t := get_likes_recursive(access_token, "", result[:])
-  if t != nil {
 
-  }
-  log.Println("last one", len(result))
-  return result, nil
-}
-
-func get_likes_recursive(access_token string, url string, urls []string) *CustomError {
+func get_likes(url string, access_token string) ([]string, *CustomError) {
   if (url == "") {
     url= fmt.Sprintf(media_liked_url + "?access_token=%s", access_token)
   }
@@ -158,7 +151,7 @@ func get_likes_recursive(access_token string, url string, urls []string) *Custom
   log.Println("fetching: ", url)
   resp, err := http.Get(url)
   if err != nil {
-    return &CustomError{err, "Could not get media liked API", 500}
+    return nil, &CustomError{err, "Could not get media liked API", 500}
   }
 
   defer resp.Body.Close()
@@ -167,18 +160,21 @@ func get_likes_recursive(access_token string, url string, urls []string) *Custom
   err = decoder.Decode(response)
 
   if err != nil {
-    return &CustomError{err, "Could not parse media liked API", 500}
+    return nil, &CustomError{err, "Could not parse media liked API", 500}
   }
 
+  urls := []string{}
   for _, like := range response.Data {
     urls = append(urls, like.Images.StandardResolution.Url)
   }
-  log.Println(len(urls))
 
-  // if there are more user liked media, recursively download it
+  // if there are more user liked media, recursively fetch it
   if response.Pagination.NextUrl != nil {
-    get_likes_recursive(access_token, *response.Pagination.NextUrl, urls)
+    next, _ := get_likes(*response.Pagination.NextUrl, access_token)
+    for _, url := range next {
+      urls = append(urls, url)
+    }
   }
 
-  return nil
+  return urls, nil
 }
