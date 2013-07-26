@@ -25,7 +25,7 @@ func main() {
   log.Fatal(http.ListenAndServe(":9999", nil))
 }
 
-// a "better" http.Handle that can catch app specific error
+// http handler func that can catch app specific error
 // To be used with http.Handle instead of http.HandleFunc
 type handler func(http.ResponseWriter, *http.Request) *CustomError
 
@@ -45,19 +45,17 @@ type CustomError struct {
   Code    int
 }
 
-func root(w http.ResponseWriter, r *http.Request) *CustomError{
+func root(w http.ResponseWriter, r *http.Request) *CustomError {
   t, _ := template.ParseFiles("index.html")
-
-  if err := t.Execute(w, nil); err != nil {
-    return &CustomError{err, "Could not parse template", 500}
-  }
+  t.Execute(w, nil)
   return nil
 }
 
 // oauth dance: http://instagram.com/developer/authentication/
-func callback(w http.ResponseWriter, r *http.Request) *CustomError{
+func callback(w http.ResponseWriter, r *http.Request) *CustomError {
   var qs = r.URL.Query()
   var code = qs.Get("code")
+  log.Println("authorization code: ", code)
 
   payload := url.Values{}
   payload.Set("client_id", client_id)
@@ -65,12 +63,9 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError{
   payload.Set("grant_type", "authorization_code")
   payload.Set("redirect_uri", redirect_url)
   payload.Set("code", code)
-  
-  log.Println("authorization code: ", code)
 
   resp, err := http.PostForm(access_token_url, payload)
   defer resp.Body.Close()
-
   if err != nil {
     return &CustomError{err, "Could not get access token from Instagram", 500}
   }
@@ -89,7 +84,7 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError{
   log.Println("access token: ", access_token)
   log.Println("full name: ", full_name)
 
-  candidates, _ := get_likes("", access_token)
+  //candidates, _ := get_likes("", access_token)
   
   return nil
 }
@@ -147,15 +142,14 @@ func get_likes(url string, access_token string) ([]string, *CustomError) {
 
   resp, err := http.Get(url)
   defer resp.Body.Close()
-
   if err != nil {
     return nil, &CustomError{err, "Could not get Instagram API /media/liked", 500}
   }
 
   decoder := json.NewDecoder(resp.Body)
   response := new(APIResponse)
-  err = decoder.Decode(response)
 
+  err = decoder.Decode(response)
   if err != nil {
     return nil, &CustomError{err, "Could not parse Instagram API /media/liked", 500}
   }
@@ -174,8 +168,4 @@ func get_likes(url string, access_token string) ([]string, *CustomError) {
   }
 
   return urls, nil
-}
-
-func download(url string) {
-  
 }
