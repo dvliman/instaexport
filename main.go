@@ -1,6 +1,7 @@
 package main
 
 import (
+  "fmt"
   "log"
   "net/url"
   "net/http"
@@ -68,25 +69,27 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError{
   log.Println("authorization code: ", code)
 
   resp, err := http.PostForm(access_token_url, payload)
+  defer resp.Body.Close()
+
   if err != nil {
     return &CustomError{err, "Could not get access token from Instagram", 500}
   }
 
-  defer resp.Body.Close()
-
-  stream, err := ioutil.ReadAll(resp.Body)
+  body, err := ioutil.ReadAll(resp.Body)
   if err != nil {
     return &CustomError{err, "Could not parse response received from Instagram", 500}
   }
 
   var oauth Token
-  json.Unmarshal(stream, &oauth)
+  json.Unmarshal(body, &oauth)
 
   access_token := oauth.AccessToken
   full_name    := oauth.User.FullName
 
   log.Println("access token: ", access_token)
   log.Println("full name: ", full_name)
+
+  get_likes(access_token)
   return nil
 }
 
@@ -102,44 +105,80 @@ type Token struct {
   }
 }
 
+// Below are not full reflection of Instagram APIs
+// They are only json subset that I am concerned of
 type APIResponse struct {
-  Pagination Pagination
-  Meta       Meta
-  Data       []Data
+  Pagination Pagination  `json:"pagination"`
+  Meta       Meta        `json:"meta"`
+  Data       []Data      `json:"data"`
 }
 
 type Pagination struct {
-  NextURL        string  `json:"next_url"`
-  NextMaxLikeId  string  `json:"next_max_like_id"`
+  NextUrl        *string  `json:"next_url"`
+  NextMaxLikeId  *string  `json:"next_max_like_id"`
 }
 
 type Meta struct {
-  Code          string  `json:"code"`
-  ErrorType     string  `json:"error_type,omitempty"`
-  ErrorMessage  string  `json:"error_message,omitempty"`
+  Code          int     `json:"code"`
+  ErrorType     string  `json:"error_type"`
+  ErrorMessage  string  `json:"error_message"`
 }
 
 type Data struct {
-  //Images Images   `json:"images"`
+  Images  Images `json:"images"`
+}
+
+type Images struct {
+  StandardResolution Resolution `json:"standard_resolution"`
+}
+
+type Resolution struct {
+  Url  string
 }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
 //   access_token :  a valid access token.
 //   count        :  count of media to return.
 //   max_like_id  :  return media liked before this id
-// func (c *Client) user_liked_media() {
-//   likes = "/api.instagram.com/v1/users/self/media/liked"
-//   url := fmt.Sprintf(likes + "?access_token=%s", token)
+func get_likes(access_token string) ([]string, *CustomError){
+  result := []string{}
+  t := get_likes_recursive(access_token, "", result[:])
+  if t != nil {
 
-//   resp, err := http.Get(url)
+  }
+  log.Println("last one", len(result))
+  return result, nil
+}
 
+func get_likes_recursive(access_token string, url string, urls []string) *CustomError {
+  if (url == "") {
+    url= fmt.Sprintf(media_liked_url + "?access_token=%s", access_token)
+  }
 
-//   defer resp.Body.Close()
+  log.Println("fetching: ", url)
+  resp, err := http.Get(url)
+  if err != nil {
+    return &CustomError{err, "Could not get media liked API", 500}
+  }
 
-//   r := new(response)
-//   err = json.NewDecoder(resp.Body).Decode(r)
-// }
+  defer resp.Body.Close()
+  decoder := json.NewDecoder(resp.Body)
+  response := new(APIResponse)
+  err = decoder.Decode(response)
 
-// func (c *Client) fetch(url string) {
+  if err != nil {
+    return &CustomError{err, "Could not parse media liked API", 500}
+  }
 
-// }
+  for _, like := range response.Data {
+    urls = append(urls, like.Images.StandardResolution.Url)
+  }
+  log.Println(len(urls))
+
+  // if there are more user liked media, recursively download it
+  if response.Pagination.NextUrl != nil {
+    get_likes_recursive(access_token, *response.Pagination.NextUrl, urls)
+  }
+
+  return nil
+}
