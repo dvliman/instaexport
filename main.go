@@ -142,25 +142,26 @@ type Resolution struct {
 }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
-
 func get_likes(url string, access_token string) ([]string, *CustomError) {
   if (url == "") {
     url= fmt.Sprintf(media_liked_url + "?access_token=%s", access_token)
   }
 
   log.Println("fetching: ", url)
+
   resp, err := http.Get(url)
+  defer resp.Body.Close()
+
   if err != nil {
-    return nil, &CustomError{err, "Could not get media liked API", 500}
+    return nil, &CustomError{err, "Could not get Instagram API /media/liked", 500}
   }
 
-  defer resp.Body.Close()
   decoder := json.NewDecoder(resp.Body)
   response := new(APIResponse)
   err = decoder.Decode(response)
 
   if err != nil {
-    return nil, &CustomError{err, "Could not parse media liked API", 500}
+    return nil, &CustomError{err, "Could not parse Instagram API /media/liked", 500}
   }
 
   urls := []string{}
