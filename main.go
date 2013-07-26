@@ -10,10 +10,6 @@ import (
   "encoding/json"
 )
 
-// todo 
-// var config struct {
-//  
-// }
 const (
   client_id        = "222c75b62b6c4a0b8b789cbaebf75375"
   client_secret    = "589eaa6bc7704eb7add52fcd229c463e"
@@ -24,16 +20,16 @@ const (
 )
 
 func main() {
-  http.Handle("/", safe(root))
-  http.Handle("/callback", safe(callback))
+  http.Handle("/", handler(root))
+  http.Handle("/callback", handler(callback))
   log.Fatal(http.ListenAndServe(":9999", nil))
 }
 
-// a "safe" http.Handle that can catch app specific error
+// a "better" http.Handle that can catch app specific error
 // To be used with http.Handle instead of http.HandleFunc
-type safe func(http.ResponseWriter, *http.Request) *CustomError
+type handler func(http.ResponseWriter, *http.Request) *CustomError
 
-func (fn safe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (fn handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
   if e := fn(w, r); e != nil {
     log.Printf("%v", e.Error)
     http.Error(w, e.Message, e.Code)
@@ -94,7 +90,7 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError{
   log.Println("full name: ", full_name)
 
   candidates, _ := get_likes("", access_token)
-  log.Println(candidates)
+  
   return nil
 }
 
@@ -111,7 +107,7 @@ type Token struct {
 }
 
 // Below are not full reflection of Instagram APIs
-// They are only json subset that I am concerned of
+// They are only subset of that I am concerned of
 type APIResponse struct {
   Pagination Pagination  `json:"pagination"`
   Meta       Meta        `json:"meta"`
@@ -178,4 +174,8 @@ func get_likes(url string, access_token string) ([]string, *CustomError) {
   }
 
   return urls, nil
+}
+
+func download(url string) {
+  
 }
