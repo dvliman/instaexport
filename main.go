@@ -1,6 +1,7 @@
 package main
 
 import (
+  "os"
   "fmt"
   "log"
   "net/url"
@@ -39,12 +40,12 @@ type CustomError struct {
   Code    int
 }
 
-// convenient function that knows how to retrieve an object
-// out of a http response, may not be the best approach
-// interface{} is a bit too generalized. Example use case:
+// convenient func to deserialize json out of an http response
+// may not be the best approach. interface{} is too generalized
+// example use case:
 //   var u User
-//   GetEntity(response, &u)
-func GetEntity(r *http.Response, v interface{}) error {
+//   entity(response, &u)
+func entity(r *http.Response, v interface{}) error {
   defer r.Body.Close()
   body, err := ioutil.ReadAll(r.Body)
   if err != nil {
@@ -55,6 +56,7 @@ func GetEntity(r *http.Response, v interface{}) error {
 
 func main() {
   http.Handle("/", handler(root))
+  http.Handle("/status", handler(status))
   http.Handle("/callback", handler(callback))
   log.Fatal(http.ListenAndServe(":9999", nil))
 }
@@ -62,6 +64,14 @@ func main() {
 func root(w http.ResponseWriter, r *http.Request) *CustomError {
   t, _ := template.ParseFiles("index.html")
   t.Execute(w, nil)
+  return nil
+}
+
+func status(w http.ResponseWriter, r *http.Request) *CustomError {
+  err := os.MkdirAll("/tmp/instaexport/", 077)
+  if err != nil {
+     return &CustomError{err, "Error creating /tmp/ directory", 500}
+  }
   return nil
 }
 
@@ -84,12 +94,12 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
   }
 
   var oauth Token
-  GetEntity(resp, &oauth)
+  entity(resp, &oauth)
 
   log.Println("access token: ", oauth.AccessToken)
   log.Println("full name: ", oauth.User.FullName)
 
-  candidates, _ := get_likes("", oauth.AccessToken)
+  candidates, _ := likes("", oauth.AccessToken)
   log.Println(candidates)
 
   return nil
@@ -108,7 +118,7 @@ type Token struct {
 }
 
 // Below are not full reflection of Instagram APIs
-// They are only subset of that I am concerned of
+// They are only subset of json that I care
 type APIResponse struct {
   Pagination Pagination `json:"pagination"`
   Meta       Meta       `json:"meta"`
@@ -139,7 +149,7 @@ type Resolution struct {
 }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
-func get_likes(url string, access_token string) ([]string, *CustomError) {
+func likes(url string, access_token string) ([]string, *CustomError) {
   if url == "" {
     url = fmt.Sprintf(media_liked_url+"?access_token=%s", access_token)
   }
@@ -152,7 +162,7 @@ func get_likes(url string, access_token string) ([]string, *CustomError) {
   }
 
   var api APIResponse
-  GetEntity(resp, &api)
+  entity(resp, &api)
 
   urls := []string{}
   for _, like := range api.Data {
@@ -161,7 +171,7 @@ func get_likes(url string, access_token string) ([]string, *CustomError) {
 
   // if there are more user liked media, recursively fetch it
   if api.Pagination.NextUrl != nil {
-    next, _ := get_likes(*api.Pagination.NextUrl, access_token)
+    next, _ := likes(*api.Pagination.NextUrl, access_token)
     for _, url := range next {
       urls = append(urls, url)
     }
