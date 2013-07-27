@@ -1,29 +1,23 @@
 package main
 
 import (
-  "fmt"
-  "log"
-  "net/url"
-  "net/http"
-  "io/ioutil"
-  "html/template"
   "encoding/json"
+  "fmt"
+  "html/template"
+  "io/ioutil"
+  "log"
+  "net/http"
+  "net/url"
 )
 
 const (
-  client_id        = "222c75b62b6c4a0b8b789cbaebf75375"
-  client_secret    = "589eaa6bc7704eb7add52fcd229c463e"
-  redirect_url     = "http://localhost:9999/callback"
+  client_id     = "222c75b62b6c4a0b8b789cbaebf75375"
+  client_secret = "589eaa6bc7704eb7add52fcd229c463e"
+  redirect_url  = "http://localhost:9999/callback"
 
   access_token_url = "https://api.instagram.com/oauth/access_token"
   media_liked_url  = "https://api.instagram.com/v1/users/self/media/liked"
 )
-
-func main() {
-  http.Handle("/", handler(root))
-  http.Handle("/callback", handler(callback))
-  log.Fatal(http.ListenAndServe(":9999", nil))
-}
 
 // http handler func that can catch app specific error
 // To be used with http.Handle instead of http.HandleFunc
@@ -43,6 +37,26 @@ type CustomError struct {
   Error   error
   Message string
   Code    int
+}
+
+// convenient function that knows how to retrieve an object
+// out of a http response, may not be the best approach
+// interface{} is a bit too generalized. Example use case:
+//   var u User
+//   GetEntity(response, &u)
+func GetEntity(r *http.Response, v interface{}) error {
+  defer r.Body.Close()
+  body, err := ioutil.ReadAll(r.Body)
+  if err != nil {
+    return err
+  }
+  return json.Unmarshal(body, v)
+}
+
+func main() {
+  http.Handle("/", handler(root))
+  http.Handle("/callback", handler(callback))
+  log.Fatal(http.ListenAndServe(":9999", nil))
 }
 
 func root(w http.ResponseWriter, r *http.Request) *CustomError {
@@ -65,63 +79,55 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
   payload.Set("code", code)
 
   resp, err := http.PostForm(access_token_url, payload)
-  defer resp.Body.Close()
   if err != nil {
-    return &CustomError{err, "Could not get access token from Instagram", 500}
-  }
-
-  body, err := ioutil.ReadAll(resp.Body)
-  if err != nil {
-    return &CustomError{err, "Could not parse response received from Instagram", 500}
+    return &CustomError{err, "Error getting access token", 500}
   }
 
   var oauth Token
-  json.Unmarshal(body, &oauth)
+  GetEntity(resp, &oauth)
 
-  access_token := oauth.AccessToken
-  full_name    := oauth.User.FullName
+  log.Println("access token: ", oauth.AccessToken)
+  log.Println("full name: ", oauth.User.FullName)
 
-  log.Println("access token: ", access_token)
-  log.Println("full name: ", full_name)
+  candidates, _ := get_likes("", oauth.AccessToken)
+  log.Println(candidates)
 
-  //candidates, _ := get_likes("", access_token)
-  
   return nil
 }
 
 type Token struct {
-  AccessToken       string  `json:"access_token"`
-  User struct {
-    Username        string  `json:"username"`
-    Bio             string  `json:"bio"`
-    Website         string  `json:"website"`
-    ProfilePicture  string  `json:"profile_picture"`
-    FullName        string  `json:"full_name"`
-    Id              string  `json:"id"`
+  AccessToken string `json:"access_token"`
+  User        struct {
+    Username       string `json:"username"`
+    Bio            string `json:"bio"`
+    Website        string `json:"website"`
+    ProfilePicture string `json:"profile_picture"`
+    FullName       string `json:"full_name"`
+    Id             string `json:"id"`
   }
 }
 
 // Below are not full reflection of Instagram APIs
 // They are only subset of that I am concerned of
 type APIResponse struct {
-  Pagination Pagination  `json:"pagination"`
-  Meta       Meta        `json:"meta"`
-  Data       []Data      `json:"data"`
+  Pagination Pagination `json:"pagination"`
+  Meta       Meta       `json:"meta"`
+  Data       []Data     `json:"data"`
 }
 
 type Pagination struct {
-  NextUrl        *string  `json:"next_url"`
-  NextMaxLikeId  *string  `json:"next_max_like_id"`
+  NextUrl       *string `json:"next_url"`
+  NextMaxLikeId *string `json:"next_max_like_id"`
 }
 
 type Meta struct {
-  Code          int     `json:"code"`
-  ErrorType     string  `json:"error_type"`
-  ErrorMessage  string  `json:"error_message"`
+  Code         int    `json:"code"`
+  ErrorType    string `json:"error_type"`
+  ErrorMessage string `json:"error_message"`
 }
 
 type Data struct {
-  Images  Images `json:"images"`
+  Images Images `json:"images"`
 }
 
 type Images struct {
@@ -129,39 +135,33 @@ type Images struct {
 }
 
 type Resolution struct {
-  Url  string
+  Url string
 }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
 func get_likes(url string, access_token string) ([]string, *CustomError) {
-  if (url == "") {
-    url= fmt.Sprintf(media_liked_url + "?access_token=%s", access_token)
+  if url == "" {
+    url = fmt.Sprintf(media_liked_url+"?access_token=%s", access_token)
   }
 
   log.Println("fetching: ", url)
 
   resp, err := http.Get(url)
-  defer resp.Body.Close()
   if err != nil {
-    return nil, &CustomError{err, "Could not get Instagram API /media/liked", 500}
+    return nil, &CustomError{err, "Error fetching Instagram /media/liked API", 500}
   }
 
-  decoder := json.NewDecoder(resp.Body)
-  response := new(APIResponse)
-
-  err = decoder.Decode(response)
-  if err != nil {
-    return nil, &CustomError{err, "Could not parse Instagram API /media/liked", 500}
-  }
+  var api APIResponse
+  GetEntity(resp, &api)
 
   urls := []string{}
-  for _, like := range response.Data {
+  for _, like := range api.Data {
     urls = append(urls, like.Images.StandardResolution.Url)
   }
 
   // if there are more user liked media, recursively fetch it
-  if response.Pagination.NextUrl != nil {
-    next, _ := get_likes(*response.Pagination.NextUrl, access_token)
+  if api.Pagination.NextUrl != nil {
+    next, _ := get_likes(*api.Pagination.NextUrl, access_token)
     for _, url := range next {
       urls = append(urls, url)
     }
