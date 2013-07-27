@@ -1,13 +1,13 @@
 package main
 
 import (
-  "encoding/json"
   "fmt"
-  "html/template"
-  "io/ioutil"
   "log"
-  "net/http"
   "net/url"
+  "net/http"
+  "io/ioutil"
+  "encoding/json"
+  "html/template"
 )
 
 const (
