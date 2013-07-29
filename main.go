@@ -4,6 +4,7 @@ import (
   "os"
   "fmt"
   "log"
+  "sync"
   "net/url"
   "net/http"
   "io/ioutil"
@@ -68,10 +69,7 @@ func root(w http.ResponseWriter, r *http.Request) *CustomError {
 }
 
 func status(w http.ResponseWriter, r *http.Request) *CustomError {
-  err := os.MkdirAll("/tmp/instaexport/", 077)
-  if err != nil {
-     return &CustomError{err, "Error creating /tmp/ directory", 500}
-  }
+
   return nil
 }
 
@@ -99,9 +97,10 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
   log.Println("access token: ", oauth.AccessToken)
   log.Println("full name: ", oauth.User.FullName)
 
+  go func() { prepare() }()
   candidates, _ := likes("", oauth.AccessToken)
-  log.Println(candidates)
-
+  download(candidates)
+  zip()
   return nil
 }
 
@@ -178,4 +177,38 @@ func likes(url string, access_token string) ([]string, *CustomError) {
   }
 
   return urls, nil
+}
+
+func prepare() {
+  downloadPath := "/tmp/instaexport"
+
+  if _, err := os.Stat(downloadPath); err != nil {
+    if os.IsNotExist(err) {
+      if err := os.MkdirAll(downloadPath, 077); err != nil {
+        log.Fatal("Could not create " + downloadPath)
+      }
+    }
+  }
+}
+
+func download(urls []string) {
+  var wg sync.WaitGroup
+
+  for _, url := range urls {
+    wg.Add(1)
+
+    go func(url string) {
+      fmt.Println(url)
+      wg.Done()
+    }(url)
+
+  }
+
+  // WaitGroup blocks until all downloads are done in parallel
+  // At this point, we can go ahead to zip the folder
+  wg.Wait()
+}
+
+func zip() {
+  fmt.Println("Zipping")
 }
