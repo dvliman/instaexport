@@ -20,8 +20,6 @@ const (
   client_secret = "589eaa6bc7704eb7add52fcd229c463e"
   redirect_url  = "http://localhost:9999/callback"
 
-  tmp_path      = "/home/dv/instaexport/"
-
   access_token_url = "https://api.instagram.com/oauth/access_token"
   media_liked_url  = "https://api.instagram.com/v1/users/self/media/liked"
 )
@@ -100,8 +98,7 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
   entity(resp, &oauth)
 
   process := NewProcess(oauth)
-  process.fetch()
-  process.download()
+  process.start()
 
   root(w, r)
   return nil
@@ -166,24 +163,26 @@ func NewProcess(oauth Token) *Process {
   return &Process {
     user : oauth.User.Username,
     token: oauth.AccessToken,
-    path : filepath.Join(tmp_path, oauth.AccessToken),
+
+    path : "",
     urls : make([]string, 0),
     done : make(chan int),
   }
 }
 
-func (p *Process) fetch() {
-  p._fetch("")
+func (p *Process) prepare() {
+  pwd, _ := os.Getwd()
+  p.path = filepath.Join(pwd, "/tmp/", p.token)
+  os.MkdirAll(p.path, 077)
 }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
-func (p *Process) _fetch(endpoint string) {
+func (p *Process) fetch(endpoint string) {
   if endpoint == "" {
     endpoint = fmt.Sprintf(media_liked_url+"?access_token=%s", p.token)
   }
 
-  log.Println("querying: " + endpoint)
-
+  log.Println("fetching: " + endpoint)
   resp, err := http.Get(endpoint)
   if err != nil {
     log.Println(err)
@@ -198,50 +197,49 @@ func (p *Process) _fetch(endpoint string) {
 
   // follow through if there are more user's liked media
   if api.Pagination.NextUrl != nil {
-    p._fetch(*api.Pagination.NextUrl)
+    p.fetch(*api.Pagination.NextUrl)
   }
 }
 
-func (p *Process) download() {
-  var wg sync.WaitGroup
+func (p *Process) download(url string) {
+  parts := strings.Split(url, "/")
+  name  := parts[len(parts) - 1]
 
+  file, err := ioutil.TempFile(p.path, name)
+  if err != nil {
+    log.Println(err)
+    return
+  }
+
+  defer file.Close()
+
+  resp, err := http.Get(url)
+  if err != nil {
+    log.Println(err)
+    return
+  }
+
+  defer resp.Body.Close()
+  io.Copy(file, resp.Body)
+}
+
+func (p *Process) zip() {
+  fmt.Println("zipping")
+}
+
+func (p *Process) start() {
+  p.prepare()
+  p.fetch("")
+
+  var wg sync.WaitGroup
   for _, url := range p.urls {
     wg.Add(1)
-
-    go func(url string) {
-      log.Println("fetching: " + url)
-
-      parts := strings.Split(url, "/")
-      target := filepath.Join(p.path, parts[len(parts) - 1])
-      filename, err := filepath.Abs(target)
-      if err != nil {
-        log.Println("1")
-        panic(err)
-      }
-
-      file, err := os.OpenFile(filename, os.O_CREATE | os.O_WRONLY | os.O_EXCL, 0644)
-      if err != nil {
-        log.Println(err)
-        return
-      }
-
-      defer file.Close()
-
-      resp, err := http.Get(url)
-      if err != nil {
-        log.Println("3")
-        return
-      }
-
-      defer resp.Body.Close()
-      io.Copy(file, resp.Body)
-
-      wg.Done()
-    }(url)
+    go p.download(url)
+    wg.Done()
   }
 
   // blocks until all downloads are done (in parallel)
-  // at this point, we can go ahead to zip the folder
+  // when finish, start zipping
   wg.Wait()
-  fmt.Println("zipping")
+  p.zip()
 }
