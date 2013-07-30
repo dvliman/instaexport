@@ -17,15 +17,17 @@ const (
   client_secret = "589eaa6bc7704eb7add52fcd229c463e"
   redirect_url  = "http://localhost:9999/callback"
 
+  tmp_path      = "/tmp/instaexport/"
+
   access_token_url = "https://api.instagram.com/oauth/access_token"
   media_liked_url  = "https://api.instagram.com/v1/users/self/media/liked"
 )
 
 // http handler func that can catch app specific error
 // To be used with http.Handle instead of http.HandleFunc
-type handler func(http.ResponseWriter, *http.Request) *CustomError
+type Handler func(http.ResponseWriter, *http.Request) *CustomError
 
-func (fn handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (fn Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
   if e := fn(w, r); e != nil {
     log.Printf("%v", e.Error)
     http.Error(w, e.Message, e.Code)
@@ -97,10 +99,16 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
   log.Println("access token: ", oauth.AccessToken)
   log.Println("full name: ", oauth.User.FullName)
 
-  go func() { prepare() }()
-  candidates, _ := likes("", oauth.AccessToken)
-  download(candidates)
-  zip()
+  process := &Process{
+    token: oauth.AccessToken,
+    path:  ouath.AccessToken,
+    urls: likes("", oauth.AccessToken)
+    done: make(chan int)
+  }
+
+  go func() { process.prepare() }()
+  go func() { process.start() }()
+
   return nil
 }
 
@@ -179,36 +187,42 @@ func likes(url string, access_token string) ([]string, *CustomError) {
   return urls, nil
 }
 
-func prepare() {
-  downloadPath := "/tmp/instaexport"
+// a unit of work per user identified by access token
+// methods should start in a goroutine and report to caller
+// used to check when the process is complete
+type Process struct {
+  token string
+  user  string
 
-  if _, err := os.Stat(downloadPath); err != nil {
-    if os.IsNotExist(err) {
-      if err := os.MkdirAll(downloadPath, 077); err != nil {
-        log.Fatal("Could not create " + downloadPath)
-      }
-    }
+  path  string
+  urls  []string
+  done  chan int
+}
+
+func (p *Process) prepare {
+  download_path = tmp_path + p.path
+
+  err := os.MkdirAll(download_path, 077)
+  if err != nil {
+    log.Fatal("Could not create " + download_path)
   }
 }
 
-func download(urls []string) {
+func (p *Process) download {
   var wg sync.WaitGroup
 
-  for _, url := range urls {
+  for _, url := range p.urls {
     wg.Add(1)
 
     go func(url string) {
       fmt.Println(url)
       wg.Done()
     }(url)
-
   }
 
-  // WaitGroup blocks until all downloads are done in parallel
-  // At this point, we can go ahead to zip the folder
+  // blocks until all downloads are done (in parallel)
+  // at this point, we can go ahead to zip the folder
   wg.Wait()
-}
 
-func zip() {
-  fmt.Println("Zipping")
+  fmt.Prinln("zipping")
 }
