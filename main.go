@@ -2,13 +2,16 @@ package main
 
 import (
   "os"
+  "io"
   "fmt"
   "log"
   "sync"
+  "strings"
   "net/url"
   "net/http"
   "io/ioutil"
   "encoding/json"
+  "path/filepath"
   "html/template"
 )
 
@@ -17,7 +20,7 @@ const (
   client_secret = "589eaa6bc7704eb7add52fcd229c463e"
   redirect_url  = "http://localhost:9999/callback"
 
-  tmp_path      = "/tmp/instaexport/"
+  tmp_path      = "/home/dv/instaexport/"
 
   access_token_url = "https://api.instagram.com/oauth/access_token"
   media_liked_url  = "https://api.instagram.com/v1/users/self/media/liked"
@@ -58,9 +61,9 @@ func entity(r *http.Response, v interface{}) error {
 }
 
 func main() {
-  http.Handle("/", handler(root))
-  http.Handle("/status", handler(status))
-  http.Handle("/callback", handler(callback))
+  http.Handle("/", Handler(root))
+  http.Handle("/status", Handler(status))
+  http.Handle("/callback", Handler(callback))
   log.Fatal(http.ListenAndServe(":9999", nil))
 }
 
@@ -96,19 +99,11 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
   var oauth Token
   entity(resp, &oauth)
 
-  log.Println("access token: ", oauth.AccessToken)
-  log.Println("full name: ", oauth.User.FullName)
+  process := NewProcess(oauth)
+  process.fetch()
+  process.download()
 
-  process := &Process{
-    token: oauth.AccessToken,
-    path:  ouath.AccessToken,
-    urls: likes("", oauth.AccessToken)
-    done: make(chan int)
-  }
-
-  go func() { process.prepare() }()
-  go func() { process.start() }()
-
+  root(w, r)
   return nil
 }
 
@@ -124,7 +119,7 @@ type Token struct {
   }
 }
 
-// Below are not full reflection of Instagram APIs
+// These are not full reflection of Instagram APIs
 // They are only subset of json that I care
 type APIResponse struct {
   Pagination Pagination `json:"pagination"`
@@ -155,67 +150,92 @@ type Resolution struct {
   Url string
 }
 
-// http://instagram.com/developer/endpoints/users/#get_users_feed_liked
-func likes(url string, access_token string) ([]string, *CustomError) {
-  if url == "" {
-    url = fmt.Sprintf(media_liked_url+"?access_token=%s", access_token)
-  }
-
-  log.Println("fetching: ", url)
-
-  resp, err := http.Get(url)
-  if err != nil {
-    return nil, &CustomError{err, "Error fetching Instagram /media/liked API", 500}
-  }
-
-  var api APIResponse
-  entity(resp, &api)
-
-  urls := []string{}
-  for _, like := range api.Data {
-    urls = append(urls, like.Images.StandardResolution.Url)
-  }
-
-  // if there are more user liked media, recursively fetch it
-  if api.Pagination.NextUrl != nil {
-    next, _ := likes(*api.Pagination.NextUrl, access_token)
-    for _, url := range next {
-      urls = append(urls, url)
-    }
-  }
-
-  return urls, nil
-}
-
 // a unit of work per user identified by access token
 // methods should start in a goroutine and report to caller
 // used to check when the process is complete
 type Process struct {
-  token string
   user  string
+  token string
 
   path  string
   urls  []string
   done  chan int
 }
 
-func (p *Process) prepare {
-  download_path = tmp_path + p.path
-
-  err := os.MkdirAll(download_path, 077)
-  if err != nil {
-    log.Fatal("Could not create " + download_path)
+func NewProcess(oauth Token) *Process {
+  return &Process {
+    user : oauth.User.Username,
+    token: oauth.AccessToken,
+    path : filepath.Join(tmp_path, oauth.AccessToken),
+    urls : make([]string, 0),
+    done : make(chan int),
   }
 }
 
-func (p *Process) download {
+func (p *Process) fetch() {
+  p._fetch("")
+}
+
+// http://instagram.com/developer/endpoints/users/#get_users_feed_liked
+func (p *Process) _fetch(endpoint string) {
+  if endpoint == "" {
+    endpoint = fmt.Sprintf(media_liked_url+"?access_token=%s", p.token)
+  }
+
+  log.Println("querying: " + endpoint)
+
+  resp, err := http.Get(endpoint)
+  if err != nil {
+    log.Println(err)
+  }
+
+  var api APIResponse
+  entity(resp, &api)
+
+  for _, like := range api.Data {
+    p.urls = append(p.urls, like.Images.StandardResolution.Url)
+  }
+
+  // follow through if there are more user's liked media
+  if api.Pagination.NextUrl != nil {
+    p._fetch(*api.Pagination.NextUrl)
+  }
+}
+
+func (p *Process) download() {
   var wg sync.WaitGroup
 
   for _, url := range p.urls {
     wg.Add(1)
 
     go func(url string) {
-      fmt.Println(url)
+      log.Println("fetching: " + url)
+
+      parts := strings.Split(url, "/")
+      target := filepath.Join(p.path, parts[len(parts) - 1])
+      filename, err := filepath.Abs(target)
+      if err != nil {
+        log.Println("1")
+        panic(err)
+      }
+
+      file, err := os.OpenFile(filename, os.O_CREATE | os.O_WRONLY | os.O_EXCL, 0644)
+      if err != nil {
+        log.Println(err)
+        return
+      }
+
+      defer file.Close()
+
+      resp, err := http.Get(url)
+      if err != nil {
+        log.Println("3")
+        return
+      }
+
+      defer resp.Body.Close()
+      io.Copy(file, resp.Body)
+
       wg.Done()
     }(url)
   }
@@ -223,6 +243,5 @@ func (p *Process) download {
   // blocks until all downloads are done (in parallel)
   // at this point, we can go ahead to zip the folder
   wg.Wait()
-
-  fmt.Prinln("zipping")
+  fmt.Println("zipping")
 }
