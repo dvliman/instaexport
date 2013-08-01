@@ -177,6 +177,19 @@ func NewProcess(oauth Token) *Process {
     }
 }
 
+func start(p *Process) {
+    // create folder for every process distinguished by access token
+    target := filepath.Join(download_path, p.token)
+    MkdirAll(target)
+    fetch(p)
+
+    log.Println("destination: ", target)
+    log.Println("image count: ", len(p.urls))
+
+    pdownload(p)
+
+}
+
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
 func fetch(p *Process) {
     if p.lastFetched == "" {
@@ -204,6 +217,33 @@ func fetch(p *Process) {
     }
 }
 
+// it is very cheap to create goroutines that
+// we quickly run out of file descriptors. use bucket to preserve some fd(s)
+func pdownload (p *Process) {
+    var wg sync.WaitGroup
+    wg.Add(len(p.urls))
+
+    // prefill bucket with 100 tokens
+    bucket := make(chan bool, 100)
+    for i := 0; i < 100; i++ {
+        bucket <- true
+    }
+
+    target := filepath.Join(download_path, p.token)
+    // use one token each time we download. replenish when we are done
+    // this way, we are not limited to only 100 concurrent http requests
+    for _, url := range p.urls {
+        go func(url, target string) {
+            <- bucket
+            defer func() { bucket <- true }()
+
+            download(url, target)
+            wg.Done()
+        }(url, target)
+    }
+    wg.Wait()
+}
+
 func download(src, dest string) {
     parts := strings.Split(src, "/")
     name := parts[len(parts)-1]
@@ -226,25 +266,4 @@ func download(src, dest string) {
     defer file.Close()
     defer response.Body.Close()
     io.Copy(file, response.Body)
-}
-
-func start(p *Process) {
-    // create folder for every process distinguished by access token
-    target := filepath.Join(download_path, p.token)
-    MkdirAll(target)
-    fetch(p)
-
-    log.Println("destination: ", target)
-    log.Println("image count: ", len(p.urls))
-
-    var wg sync.WaitGroup
-    wg.Add(len(p.urls))
-
-    for _, url := range p.urls {
-        go func(url, target string) {
-            download(url, target)
-            wg.Done()
-        }(url, target)
-    }
-    wg.Wait()
 }
