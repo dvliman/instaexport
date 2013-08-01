@@ -5,7 +5,7 @@ import (
   "io"
   "fmt"
   "log"
-  //"sync"
+  "sync"
   "syscall"
   "strings"
   "net/url"
@@ -67,8 +67,6 @@ func MkdirAll(location string) {
 }
 
 func main() {
-  MkdirAll(download_path)
-
   http.Handle("/", Handler(root))
   http.Handle("/status", Handler(status))
   http.Handle("/callback", Handler(callback))
@@ -242,12 +240,14 @@ func start (p *Process) {
   log.Println("destination: ", target)
   log.Println("image count: ", len(p.urls))
 
-  //var wg sync.WaitGroup
-  for _, url := range p.urls {
-    //wg.Add(1)
-    download(url, target)
-    //wg.Done()
-  }
+  var wg sync.WaitGroup
+  wg.Add(len(p.urls))
 
-  //wg.Wait()
+  for _, url := range p.urls {
+    go func(url, target string) {
+      download(url, target)
+      wg.Done()
+    }(url, target)
+  }
+  wg.Wait()
 }
