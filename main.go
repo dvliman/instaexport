@@ -5,7 +5,8 @@ import (
   "io"
   "fmt"
   "log"
-  "sync"
+  //"sync"
+  "syscall"
   "strings"
   "net/url"
   "net/http"
@@ -18,14 +19,15 @@ import (
 const (
   client_id     = "222c75b62b6c4a0b8b789cbaebf75375"
   client_secret = "589eaa6bc7704eb7add52fcd229c463e"
+
   redirect_url  = "http://localhost:9999/callback"
+  download_path = "/tmp/instaexport/"
 
   access_token_url = "https://api.instagram.com/oauth/access_token"
   media_liked_url  = "https://api.instagram.com/v1/users/self/media/liked"
 )
 
-// http handler func that can catch app specific error
-// To be used with http.Handle instead of http.HandleFunc
+// higher order function for http handler that can catch error
 type Handler func(http.ResponseWriter, *http.Request) *CustomError
 
 func (fn Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -35,20 +37,16 @@ func (fn Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
   }
 }
 
-// custom error type that allows us to
-// record the full error in the log and
-// at the same time, display nice message to the user
+// to record full error and at the same time
+// present nicer messsage to the end user
 type CustomError struct {
   Error   error
   Message string
   Code    int
 }
 
-// convenient func to deserialize json out of an http response
-// may not be the best approach. interface{} is too generalized
-// example use case:
-//   var u User
-//   entity(response, &u)
+// deserialize json out of an http response
+// use case: var u User; entity(response, &u)
 func entity(r *http.Response, v interface{}) error {
   defer r.Body.Close()
   body, err := ioutil.ReadAll(r.Body)
@@ -58,7 +56,19 @@ func entity(r *http.Response, v interface{}) error {
   return json.Unmarshal(body, v)
 }
 
+// http://en.wikipedia.org/wiki/Umask
+func MkdirAll(location string) {
+  oldMask := syscall.Umask(0)
+  err := os.MkdirAll(location, os.ModePerm)
+  if err != nil {
+    log.Fatal(err)
+  }
+  syscall.Umask(oldMask)
+}
+
 func main() {
+  MkdirAll(download_path)
+
   http.Handle("/", Handler(root))
   http.Handle("/status", Handler(status))
   http.Handle("/callback", Handler(callback))
@@ -80,7 +90,6 @@ func status(w http.ResponseWriter, r *http.Request) *CustomError {
 func callback(w http.ResponseWriter, r *http.Request) *CustomError {
   var qs = r.URL.Query()
   var code = qs.Get("code")
-  log.Println("authorization code: ", code)
 
   payload := url.Values{}
   payload.Set("client_id", client_id)
@@ -97,8 +106,9 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
   var oauth Token
   entity(resp, &oauth)
 
+  log.Printf("code: %s, token: %s, name: %s\n", code, oauth.AccessToken, oauth.User.Username)
   process := NewProcess(oauth)
-  process.start()
+  start(process)
 
   root(w, r)
   return nil
@@ -116,8 +126,8 @@ type Token struct {
   }
 }
 
-// These are not full reflection of Instagram APIs
-// They are only subset of json that I care
+// not full reflection of Instagram APIs
+// only subset of json that I care
 type APIResponse struct {
   Pagination Pagination `json:"pagination"`
   Meta       Meta       `json:"meta"`
@@ -147,43 +157,35 @@ type Resolution struct {
   Url string
 }
 
-// a unit of work per user identified by access token
-// methods should start in a goroutine and report to caller
-// used to check when the process is complete
 type Process struct {
   user  string
   token string
 
-  path  string
-  urls  []string
-  done  chan int
+  lastFetched string
+  urls        []string
+  done        chan int
 }
+
+var state = map[string] Process {}
 
 func NewProcess(oauth Token) *Process {
   return &Process {
     user : oauth.User.Username,
     token: oauth.AccessToken,
 
-    path : "",
+    lastFetched: "",
     urls : make([]string, 0),
     done : make(chan int),
   }
 }
 
-func (p *Process) prepare() {
-  pwd, _ := os.Getwd()
-  p.path = filepath.Join(pwd, "/tmp/", p.token)
-  os.MkdirAll(p.path, 077)
-}
-
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
-func (p *Process) fetch(endpoint string) {
-  if endpoint == "" {
-    endpoint = fmt.Sprintf(media_liked_url+"?access_token=%s", p.token)
+func fetch (p *Process) {
+  if p.lastFetched == "" {
+    p.lastFetched = fmt.Sprintf(media_liked_url+"?access_token=%s", p.token)
   }
 
-  log.Println("fetching: " + endpoint)
-  resp, err := http.Get(endpoint)
+  resp, err := http.Get(p.lastFetched)
   if err != nil {
     log.Println(err)
   }
@@ -191,55 +193,61 @@ func (p *Process) fetch(endpoint string) {
   var api APIResponse
   entity(resp, &api)
 
+  // for the sake of logging purpose
+  if api.Pagination.NextMaxLikeId != nil {
+    log.Println("fetching:", *api.Pagination.NextMaxLikeId)
+  }
+
   for _, like := range api.Data {
     p.urls = append(p.urls, like.Images.StandardResolution.Url)
   }
 
   // follow through if there are more user's liked media
   if api.Pagination.NextUrl != nil {
-    p.fetch(*api.Pagination.NextUrl)
+    p.lastFetched = *api.Pagination.NextUrl
+    fetch(p)
   }
 }
 
-func (p *Process) download(url string) {
-  parts := strings.Split(url, "/")
+func download(src, dest string) {
+  parts := strings.Split(src, "/")
   name  := parts[len(parts) - 1]
+  destination := filepath.Join(dest, name)
 
-  file, err := ioutil.TempFile(p.path, name)
+  file, err := os.OpenFile(destination, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
   if err != nil {
+    log.Println("1")
     log.Println(err)
     return
   }
 
   defer file.Close()
 
-  resp, err := http.Get(url)
+  response, err := http.Get(src)
   if err != nil {
+    log.Println("2")
     log.Println(err)
     return
   }
 
-  defer resp.Body.Close()
-  io.Copy(file, resp.Body)
+  defer response.Body.Close()
+  io.Copy(file, response.Body)
 }
 
-func (p *Process) zip() {
-  fmt.Println("zipping")
-}
+func start (p *Process) {
+  target := filepath.Join(download_path, p.token)
+  MkdirAll(target)
+  fetch(p)
 
-func (p *Process) start() {
-  p.prepare()
-  p.fetch("")
+  log.Println("destination: ", target)
+  log.Println("image count: ", len(p.urls))
 
-  var wg sync.WaitGroup
+  //var wg sync.WaitGroup
   for _, url := range p.urls {
-    wg.Add(1)
-    go p.download(url)
-    wg.Done()
+    //wg.Add(1)
+    download(url, target)
+    //wg.Done()
   }
 
-  // blocks until all downloads are done (in parallel)
-  // when finish, start zipping
-  wg.Wait()
-  p.zip()
+  //wg.Wait()
 }
