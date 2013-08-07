@@ -11,7 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"sync"
 	"syscall"
 )
@@ -56,17 +56,9 @@ func entity(r *http.Response, v interface{}) error {
 	return json.Unmarshal(body, v)
 }
 
-// http://en.wikipedia.org/wiki/Umask
-func MkdirAll(location string) {
-	oldMask := syscall.Umask(0)
-	err := os.MkdirAll(location, os.ModePerm)
-	if err != nil {
-		log.Fatal(err)
-	}
-	syscall.Umask(oldMask)
-}
-
 func main() {
+	fmt.Println("instaexport started -- waiting for request")
+
 	http.Handle("/", Handler(root))
 	http.Handle("/status", Handler(status))
 	http.Handle("/callback", Handler(callback))
@@ -80,7 +72,7 @@ func root(w http.ResponseWriter, r *http.Request) *CustomError {
 }
 
 func status(w http.ResponseWriter, r *http.Request) *CustomError {
-
+	//fmt.Fprintf(w, session)
 	return nil
 }
 
@@ -106,7 +98,7 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 
 	log.Printf("code: %s, token: %s, name: %s\n", code, oauth.AccessToken, oauth.User.Username)
 	process := NewProcess(oauth)
-	start(process)
+	run(process)
 
 	root(w, r)
 	return nil
@@ -125,7 +117,7 @@ type Token struct {
 }
 
 // not full reflection of Instagram APIs
-// only subset of json that I care
+// only subset of json that I am interested with
 type APIResponse struct {
 	Pagination Pagination `json:"pagination"`
 	Meta       Meta       `json:"meta"`
@@ -159,47 +151,61 @@ type Process struct {
 	user  string
 	token string
 
-	lastFetched string
-	urls        []string
-	done        chan int
+	path string
+	last string
+	urls []string
+	done bool
+	perr chan error
 }
 
-var state = map[string]Process{}
+var session = map[string]*Process{}
 
 func NewProcess(oauth Token) *Process {
 	return &Process{
 		user:  oauth.User.Username,
 		token: oauth.AccessToken,
 
-		lastFetched: "",
-		urls:        make([]string, 0),
-		done:        make(chan int),
-		perr:        make(chan string),
+		path: "",
+		last: "",
+		urls: make([]string, 0),
+		done: false,
+		perr: make(chan error),
 	}
 }
 
-func start(p *Process) {
-	// create folder for every process distinguished by access token
-	target := filepath.Join(download_path, p.token)
-	MkdirAll(target)
+func run(p *Process) {
+	register(p)
+	prepare(p)
 	fetch(p)
+	report(p)
+	download(p)
+	done(p)
+}
 
-	log.Println("destination: ", target)
-	log.Println("image count: ", len(p.urls))
+func register(p *Process) {
+	_, ok := session[p.token]
+	if ok != true {
+		session[p.token] = p
+	}
+}
 
-	pdownload(p)
+func prepare(p *Process) {
+	p.path = filepath.Join(download_path, p.token)
 
+	// http://en.wikipedia.org/wiki/Umask
+	oldMask := syscall.Umask(0)
+	os.MkdirAll(p.path, os.ModePerm)
+	syscall.Umask(oldMask)
 }
 
 // http://instagram.com/developer/endpoints/users/#get_users_feed_liked
 func fetch(p *Process) {
-	if p.lastFetched == "" {
-		p.lastFetched = fmt.Sprintf(media_liked_url+"?access_token=%s", p.token)
+	if p.last == "" {
+		p.last = fmt.Sprintf(media_liked_url+"?access_token=%s", p.token)
 	}
 
-	log.Println("fetching: ", p.lastFetched)
-
-	resp, err := http.Get(p.lastFetched)
+	log.Println("fetching: ", p.last)
+	resp, err := http.Get(p.last)
 	if err != nil {
 		log.Println(err)
 	}
@@ -213,14 +219,20 @@ func fetch(p *Process) {
 
 	// follow through if there are more user's liked media
 	if api.Pagination.NextUrl != nil {
-		p.lastFetched = *api.Pagination.NextUrl
+		p.last = *api.Pagination.NextUrl
 		fetch(p)
 	}
 }
 
+func report(p *Process) {
+	log.Println("destination: ", p.path)
+	log.Println("image count: ", len(p.urls))
+}
+
 // it is very cheap to create goroutines that
-// we quickly run out of file descriptors. use bucket to preserve some fd(s)
-func pdownload(p *Process) {
+// we quickly run out of file descriptors.
+// use rolling bucket to preserve some fd(s)
+func download(p *Process) {
 	var wg sync.WaitGroup
 	wg.Add(len(p.urls))
 
@@ -230,33 +242,41 @@ func pdownload(p *Process) {
 		bucket <- true
 	}
 
-	target := filepath.Join(download_path, p.token)
 	// use one token each time we download. replenish when we are done
 	// this way, we are not limited to only 100 concurrent http requests
-	for _, url := range p.urls {
-		go func(url, target string) {
+	for i, url := range p.urls {
+		go func(src, dest string) {
+
 			<-bucket
 			defer func() { bucket <- true }()
-
-			download(url, target)
+			grab(src, dest)
 			wg.Done()
-		}(url, target)
+
+			/* rewrite the picture filename so its ordered */
+		}(url, filepath.Join(p.path, strconv.Itoa(i)+".jpg"))
 	}
 	wg.Wait()
 }
 
-func download(src, dest string) {
-	parts := strings.Split(src, "/")
-	name := parts[len(parts)-1]
-	destination := filepath.Join(dest, name)
+func done(p *Process) {
+	p.done = true
+}
 
-	file, err := os.OpenFile(destination, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
+func stop(p *Process) {
+	delete(session, p.token)
+	os.RemoveAll(p.path)
+	p = nil
+}
+
+func grab(src, dest string) {
+	file, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
 		log.Println("1")
 		log.Println(err)
 		return
 	}
 
+	fmt.Println("downloading: ", src)
 	response, err := http.Get(src)
 	if err != nil {
 		log.Println("2")
