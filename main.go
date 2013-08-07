@@ -233,14 +233,15 @@ func download(p *Process) {
 	var wg sync.WaitGroup
 	wg.Add(len(p.urls))
 
-	// prefill bucket with 100 tokens
-	bucket := make(chan bool, 100)
-	for i := 0; i < 100; i++ {
+	// prefill bucket with 128 tokens
+	bucket := make(chan bool, 128)
+	for i := 0; i < 128; i++ {
 		bucket <- true
 	}
 
-	// use one token each time we download. replenish when we are done
-	// this way, we are not limited to only 100 concurrent http requests
+	// borrow one token each time we download. return when download is done
+	// this way, we have a rolling bucket which prevent upper limit 128 concurrent reqs
+	// if we run out of token, the method will block until it can borrow
 	for i, url := range p.urls {
 		go func(src, dest string) {
 
@@ -252,6 +253,9 @@ func download(p *Process) {
 			/* rewrite the picture filename so its ordered */
 		}(url, filepath.Join(p.path, strconv.Itoa(i)+".jpg"))
 	}
+
+	// block until all downloads are done
+	// can't continue to the next stage of pipeline
 	wg.Wait()
 }
 
