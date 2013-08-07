@@ -49,10 +49,7 @@ type CustomError struct {
 // use case: var u User; entity(response, &u)
 func entity(r *http.Response, v interface{}) error {
 	defer r.Body.Close()
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return err
-	}
+	body, _ := ioutil.ReadAll(r.Body)
 	return json.Unmarshal(body, v)
 }
 
@@ -96,9 +93,8 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 	var oauth Token
 	entity(resp, &oauth)
 
-	log.Printf("code: %s, token: %s, name: %s\n", code, oauth.AccessToken, oauth.User.Username)
 	process := NewProcess(oauth)
-	run(process)
+	go run(process)
 
 	root(w, r)
 	return nil
@@ -174,6 +170,7 @@ func NewProcess(oauth Token) *Process {
 }
 
 func run(p *Process) {
+	log.Printf("name: %s, token: %s\n", p.user, p.token)
 	register(p)
 	prepare(p)
 	fetch(p)
