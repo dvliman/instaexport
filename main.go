@@ -2,15 +2,14 @@ package main
 
 import (
 	"crypto/tls"
-	"time"
-	"net"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const (
@@ -64,7 +64,7 @@ func writeCookie(w http.ResponseWriter, oauth Token) {
 
 // https://gist.github.com/mynameisfiber/2853066
 func createHttpClient() *http.Client {
-	transport := &http.Transport {
+	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		// dial function for creating TCP connections
 		Dial: func(network, addr string) (net.Conn, error) {
@@ -81,7 +81,7 @@ func createHttpClient() *http.Client {
 	return &http.Client{
 		Transport: transport,
 		// redirect policy for this http client
-		CheckRedirect: func(r *http.Request, via [] *http.Request) error {
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			if len(via) >= 1 {
 				return errors.New("stop following redirect")
 			}
@@ -296,16 +296,16 @@ func kill(p *Process) {
 	p = nil
 }
 
-func grab(src, dest string)  {
+func grab(src, dest string) {
 	file, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
-		return 
+		return
 	}
 
 	fmt.Println("downloading: ", src)
 	response, err := http.Get(src)
 	if err != nil {
-		return 
+		return
 	}
 
 	defer file.Close()
