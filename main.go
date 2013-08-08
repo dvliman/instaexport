@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto/tls"
+	"time"
+	"net"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -54,8 +58,36 @@ func entity(r *http.Response, v interface{}) error {
 }
 
 func writeCookie(w http.ResponseWriter, oauth Token) {
-	cookie := &http.Cookie {Name: "instaexport", Value: oauth.AccessToken}
+	cookie := &http.Cookie{Name: "instaexport", Value: oauth.AccessToken}
 	http.SetCookie(w, cookie)
+}
+
+// https://gist.github.com/mynameisfiber/2853066
+func createHttpClient() *http.Client {
+	transport := &http.Transport {
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		// dial function for creating TCP connections
+		Dial: func(network, addr string) (net.Conn, error) {
+			deadline := time.Now().Add(800 * time.Millisecond)
+			c, err := net.DialTimeout(network, addr, time.Second)
+			if err != nil {
+				return nil, err
+			}
+			c.SetDeadline(deadline)
+			return c, nil
+		},
+	}
+
+	return &http.Client{
+		Transport: transport,
+		// redirect policy for this http client
+		CheckRedirect: func(r *http.Request, via [] *http.Request) error {
+			if len(via) >= 1 {
+				return errors.New("stop following redirect")
+			}
+			return nil
+		},
+	}
 }
 
 func main() {
@@ -97,7 +129,7 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 	var oauth Token
 	entity(resp, &oauth)
 
-	process := NewProcess(oauth)
+	process := newProcess(oauth)
 	go run(process)
 
 	writeCookie(w, oauth)
@@ -159,7 +191,7 @@ type Process struct {
 	perr chan error
 }
 
-func NewProcess(oauth Token) *Process {
+func newProcess(oauth Token) *Process {
 	return &Process{
 		user:  oauth.User.Username,
 		token: oauth.AccessToken,
