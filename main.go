@@ -242,7 +242,7 @@ func download(p *Process) {
 
 			<-bucket
 			defer func() { bucket <- true }()
-			p.perr <- grab(src, dest)
+			grab(src, dest)
 			wg.Done()
 
 			/* rewrite the picture filename so its ordered */
@@ -255,6 +255,7 @@ func download(p *Process) {
 }
 
 func done(p *Process) {
+	log.Println("download is done!")
 	p.done = true
 }
 
@@ -263,25 +264,19 @@ func kill(p *Process) {
 	p = nil
 }
 
-func zip(p *Process) {
-
-}
-
-func grab(src, dest string) error {
+func grab(src, dest string)  {
 	file, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
-		return err
+		return 
 	}
 
 	fmt.Println("downloading: ", src)
 	response, err := http.Get(src)
 	if err != nil {
-		return err
+		return 
 	}
 
 	defer file.Close()
 	defer response.Body.Close()
 	io.Copy(file, response.Body)
-
-	return nil
 }
