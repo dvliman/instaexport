@@ -53,6 +53,11 @@ func entity(r *http.Response, v interface{}) error {
 	return json.Unmarshal(body, v)
 }
 
+func writeCookie(w http.ResponseWriter, oauth Token) {
+	cookie := &http.Cookie {Name: "instaexport", Value: oauth.AccessToken}
+	http.SetCookie(w, cookie)
+}
+
 func main() {
 	fmt.Println("instaexport started -- waiting for request")
 
@@ -69,7 +74,6 @@ func root(w http.ResponseWriter, r *http.Request) *CustomError {
 }
 
 func status(w http.ResponseWriter, r *http.Request) *CustomError {
-	//fmt.Fprintf(w, session)
 	return nil
 }
 
@@ -96,6 +100,7 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 	process := NewProcess(oauth)
 	go run(process)
 
+	writeCookie(w, oauth)
 	root(w, r)
 	return nil
 }
@@ -154,8 +159,6 @@ type Process struct {
 	perr chan error
 }
 
-var session = map[string]*Process{}
-
 func NewProcess(oauth Token) *Process {
 	return &Process{
 		user:  oauth.User.Username,
@@ -171,19 +174,11 @@ func NewProcess(oauth Token) *Process {
 
 func run(p *Process) {
 	log.Printf("name: %s, token: %s\n", p.user, p.token)
-	register(p)
 	prepare(p)
 	fetch(p)
 	report(p)
 	download(p)
 	done(p)
-}
-
-func register(p *Process) {
-	_, ok := session[p.token]
-	if ok != true {
-		session[p.token] = p
-	}
 }
 
 func prepare(p *Process) {
@@ -247,7 +242,7 @@ func download(p *Process) {
 
 			<-bucket
 			defer func() { bucket <- true }()
-			grab(src, dest)
+			p.perr <- grab(src, dest)
 			wg.Done()
 
 			/* rewrite the picture filename so its ordered */
@@ -263,29 +258,30 @@ func done(p *Process) {
 	p.done = true
 }
 
-func stop(p *Process) {
-	delete(session, p.token)
+func kill(p *Process) {
 	os.RemoveAll(p.path)
 	p = nil
 }
 
-func grab(src, dest string) {
+func zip(p *Process) {
+
+}
+
+func grab(src, dest string) error {
 	file, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 	if err != nil {
-		log.Println("1")
-		log.Println(err)
-		return
+		return err
 	}
 
 	fmt.Println("downloading: ", src)
 	response, err := http.Get(src)
 	if err != nil {
-		log.Println("2")
-		log.Println(err)
-		return
+		return err
 	}
 
 	defer file.Close()
 	defer response.Body.Close()
 	io.Copy(file, response.Body)
+
+	return nil
 }
