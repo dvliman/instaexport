@@ -91,9 +91,9 @@ func createHttpClient() *http.Client {
 	}
 }
 
-// this server uses combination of cookie and filesystem check to keep track of export process
+// this server uses combination of cookie and filesystem seek to keep track of export process
 // server is stateless and can be launched as multi-processes backend upstream on a singlebox
-// filesystem check is not that expensive on ssd
+// filesystem seek is not that expensive on ssd
 func main() {
 	log.Println("-- instaexport started")
 
@@ -107,47 +107,6 @@ func main() {
 func root(w http.ResponseWriter, r *http.Request) *CustomError {
 	t, _ := template.ParseFiles("index.html")
 	t.Execute(w, nil)
-	return nil
-}
-
-func status(w http.ResponseWriter, r *http.Request) *CustomError {
-	cookie, err := r.Cookie("instaexport")
-	if err != nil {
-		return &CustomError{err, "Can't read cookies. Did you disable it?", 500}
-	}
-
-	check := filepath.Join(download_path, cookie.Value + "-done")
-	f, err := os.Stat(check)
-	if f != nil { } // why I can't _ on os.FileInfo?
-	if err == nil {
-		fmt.Fprintf(w, "OK")
-	}
-	if os.IsNotExist(err) {
-		fmt.Fprintln(w, "KO")
-	}
-
-	return &CustomError{err, "Something went wrong. Please try again...", 500}
-}
-
-func export(w http.ResponseWriter, r *http.Request) *CustomError {
-	cookie, err := r.Cookie("instaexport")
-	if err != nil {
-		return &CustomError{err, "Can't read cookies. Did you disable it?", 500}
-	}
-
-	// w.Header().Set("Content-Disposition", "attachment; filename=instaexport.zip")
-	// w.Header().Set("Content-Type", "application/zip")
-	// w.WriteHeader(200)
-
-	zw := zip.NewWriter(w)
-	defer zw.Close()
-
-	target := filepath.Join(download_path, cookie.Value)
-	files, _ := ioutil.ReadDir(target)
-	for _, f := range files {
-		fmt.Fprintf(w, "%s\n", f.Name())
-	}
-
 	return nil
 }
 
@@ -176,6 +135,48 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 
 	writeCookie(w, oauth)
 	root(w, r)
+	return nil
+}
+
+func status(w http.ResponseWriter, r *http.Request) *CustomError {
+	cookie, err := r.Cookie("instaexport")
+	if err != nil {
+		return &CustomError{err, "Can't read cookies. Did you disable it?", 500}
+	}
+
+	check := filepath.Join(download_path, cookie.Value + "-done")
+	f, err := os.Stat(check)
+	if f != nil { } // why I can't _ on os.FileInfo?
+	if err == nil {
+		fmt.Fprintf(w, "OK")
+	}
+	if os.IsNotExist(err) {
+		fmt.Fprintln(w, "KO")
+	}
+	return nil
+}
+
+func export(w http.ResponseWriter, r *http.Request) *CustomError {
+	cookie, err := r.Cookie("instaexport")
+	if err != nil {
+		return &CustomError{err, "Can't read cookies. Did you disable it?", 500}
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename=instaexport.zip")
+	w.Header().Set("Content-Type", "application/zip")
+	w.WriteHeader(200)
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	target := filepath.Join(download_path, cookie.Value)
+	files, _ := ioutil.ReadDir(target)
+	for _, f := range files {
+		if err := archive(zw, f.Name()); err != nil {
+			return &CustomError{err, "failed to zip. try again?", 500}
+		}
+	}
+
 	return nil
 }
 
@@ -354,4 +355,31 @@ func grab(src, dest string) {
 	defer file.Close()
 	defer response.Body.Close()
 	io.Copy(file, response.Body)
+}
+
+func archive(zipper *zip.Writer, filename string) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+
+	header.Name = filename
+	writer, err := zipper.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+
+	io.Copy(writer, file)
+	return err
 }
