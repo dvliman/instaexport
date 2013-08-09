@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -66,7 +67,7 @@ func writeCookie(w http.ResponseWriter, oauth Token) {
 func createHttpClient() *http.Client {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		// dial function for creating TCP connections
+		// dial function for establishing TCP connections
 		Dial: func(network, addr string) (net.Conn, error) {
 			deadline := time.Now().Add(800 * time.Millisecond)
 			c, err := net.DialTimeout(network, addr, time.Second)
@@ -80,7 +81,7 @@ func createHttpClient() *http.Client {
 
 	return &http.Client{
 		Transport: transport,
-		// redirect policy for this http client
+		// redirect policy stop after being redirected once
 		CheckRedirect: func(r *http.Request, via []*http.Request) error {
 			if len(via) >= 1 {
 				return errors.New("stop following redirect")
@@ -90,10 +91,14 @@ func createHttpClient() *http.Client {
 	}
 }
 
+// this server uses combination of cookie and filesystem check to keep track of export process
+// server is stateless and can be launched as multi-processes backend upstream on a singlebox
+// filesystem check is not that expensive on ssd
 func main() {
-	fmt.Println("instaexport started -- waiting for request")
+	log.Println("-- instaexport started")
 
 	http.Handle("/", Handler(root))
+	http.Handle("/export", Handler(export))
 	http.Handle("/status", Handler(status))
 	http.Handle("/callback", Handler(callback))
 	log.Fatal(http.ListenAndServe(":9999", nil))
@@ -106,6 +111,43 @@ func root(w http.ResponseWriter, r *http.Request) *CustomError {
 }
 
 func status(w http.ResponseWriter, r *http.Request) *CustomError {
+	cookie, err := r.Cookie("instaexport")
+	if err != nil {
+		return &CustomError{err, "Can't read cookies. Did you disable it?", 500}
+	}
+
+	check := filepath.Join(download_path, cookie.Value + "-done")
+	f, err := os.Stat(check)
+	if f != nil { } // why I can't _ on os.FileInfo?
+	if err == nil {
+		fmt.Fprintf(w, "OK")
+	}
+	if os.IsNotExist(err) {
+		fmt.Fprintln(w, "KO")
+	}
+
+	return &CustomError{err, "Something went wrong. Please try again...", 500}
+}
+
+func export(w http.ResponseWriter, r *http.Request) *CustomError {
+	cookie, err := r.Cookie("instaexport")
+	if err != nil {
+		return &CustomError{err, "Can't read cookies. Did you disable it?", 500}
+	}
+
+	// w.Header().Set("Content-Disposition", "attachment; filename=instaexport.zip")
+	// w.Header().Set("Content-Type", "application/zip")
+	// w.WriteHeader(200)
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	target := filepath.Join(download_path, cookie.Value)
+	files, _ := ioutil.ReadDir(target)
+	for _, f := range files {
+		fmt.Fprintf(w, "%s\n", f.Name())
+	}
+
 	return nil
 }
 
@@ -129,7 +171,7 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 	var oauth Token
 	entity(resp, &oauth)
 
-	process := newProcess(oauth)
+	process := NewProcess(oauth)
 	go run(process)
 
 	writeCookie(w, oauth)
@@ -187,11 +229,9 @@ type Process struct {
 	path string
 	last string
 	urls []string
-	done bool
-	perr chan error
 }
 
-func newProcess(oauth Token) *Process {
+func NewProcess(oauth Token) *Process {
 	return &Process{
 		user:  oauth.User.Username,
 		token: oauth.AccessToken,
@@ -199,8 +239,6 @@ func newProcess(oauth Token) *Process {
 		path: "",
 		last: "",
 		urls: make([]string, 0),
-		done: false,
-		perr: make(chan error),
 	}
 }
 
@@ -260,14 +298,14 @@ func download(p *Process) {
 	var wg sync.WaitGroup
 	wg.Add(len(p.urls))
 
-	// prefill bucket with 128 tokens
-	bucket := make(chan bool, 128)
-	for i := 0; i < 128; i++ {
+	// prefill bucket with 100 tokens
+	bucket := make(chan bool, 100)
+	for i := 0; i < 100; i++ {
 		bucket <- true
 	}
 
 	// borrow one token each time we download. return when download is done
-	// this way, we have a rolling bucket which prevent upper limit 128 concurrent reqs
+	// this way, we have a rolling bucket which prevent upper limit 100 concurrent reqs
 	// if we run out of token, the method will block until it can borrow
 	for i, url := range p.urls {
 		go func(src, dest string) {
@@ -287,8 +325,8 @@ func download(p *Process) {
 }
 
 func done(p *Process) {
-	log.Println("download is done!")
-	p.done = true
+	//mark := filepath.Join(p.path, "-done")
+	//os.OpenFile(mark, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 }
 
 func kill(p *Process) {
@@ -303,7 +341,12 @@ func grab(src, dest string) {
 	}
 
 	fmt.Println("downloading: ", src)
-	response, err := http.Get(src)
+	
+	httpClient := createHttpClient()
+	request, err := http.NewRequest("GET", src, nil)
+	request.Header.Add("User-Agent", "Instaexport -- export your liked pictures on instagram")
+	
+	response, err := httpClient.Do(request)
 	if err != nil {
 		return
 	}
