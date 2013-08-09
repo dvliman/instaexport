@@ -233,7 +233,7 @@ type Process struct {
 }
 
 func NewProcess(oauth Token) *Process {
-	return &Process{
+	return &Process {
 		user:  oauth.User.Username,
 		token: oauth.AccessToken,
 
@@ -244,7 +244,6 @@ func NewProcess(oauth Token) *Process {
 }
 
 func run(p *Process) {
-	log.Printf("name: %s, token: %s\n", p.user, p.token)
 	prepare(p)
 	fetch(p)
 	report(p)
@@ -288,6 +287,7 @@ func fetch(p *Process) {
 }
 
 func report(p *Process) {
+	log.Println("username   : ", p.user)
 	log.Println("destination: ", p.path)
 	log.Println("image count: ", len(p.urls))
 }
@@ -326,8 +326,8 @@ func download(p *Process) {
 }
 
 func done(p *Process) {
-	//mark := filepath.Join(p.path, "-done")
-	//os.OpenFile(mark, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
+	mark := filepath.Join(download_path, p.token + "-done")
+	os.OpenFile(mark, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 }
 
 func kill(p *Process) {
