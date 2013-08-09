@@ -2,15 +2,12 @@ package main
 
 import (
 	"archive/zip"
-	"crypto/tls"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,7 +15,6 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
-	"time"
 )
 
 const (
@@ -63,37 +59,9 @@ func writeCookie(w http.ResponseWriter, oauth Token) {
 	http.SetCookie(w, cookie)
 }
 
-// https://gist.github.com/mynameisfiber/2853066
-func createHttpClient() *http.Client {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		// dial function for establishing TCP connections
-		Dial: func(network, addr string) (net.Conn, error) {
-			deadline := time.Now().Add(800 * time.Millisecond)
-			c, err := net.DialTimeout(network, addr, time.Second)
-			if err != nil {
-				return nil, err
-			}
-			c.SetDeadline(deadline)
-			return c, nil
-		},
-	}
-
-	return &http.Client{
-		Transport: transport,
-		// redirect policy stop after being redirected once
-		CheckRedirect: func(r *http.Request, via []*http.Request) error {
-			if len(via) >= 1 {
-				return errors.New("stop following redirect")
-			}
-			return nil
-		},
-	}
-}
-
-// this server uses combination of cookie and filesystem seek to keep track of export process
-// server is stateless and can be launched as multi-processes backend upstream on a singlebox
-// filesystem seek is not that expensive on ssd
+// this server uses combination of cookie and filesystem seek to keep track of
+// the export job. server is stateless and can be launched as multi-processes 
+// backend upstream on a singlebox. filesystem seek is not that expensive on ssd
 func main() {
 	log.Println("-- instaexport started")
 
@@ -141,12 +109,13 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 func status(w http.ResponseWriter, r *http.Request) *CustomError {
 	cookie, err := r.Cookie("instaexport")
 	if err != nil {
-		return &CustomError{err, "Can't read cookies. Did you disable it?", 500}
+		return &CustomError{err, "Can't read cookie. Enable it?", 500}
 	}
 
-	check := filepath.Join(download_path, cookie.Value + "-done")
+	check := filepath.Join(download_path, cookie.Value+"-done")
 	f, err := os.Stat(check)
-	if f != nil { } // why I can't _ on os.FileInfo?
+	if f != nil { // why can't I ignore os.FileInfo?
+	}
 	if err == nil {
 		fmt.Fprintf(w, "OK")
 	}
@@ -159,7 +128,7 @@ func status(w http.ResponseWriter, r *http.Request) *CustomError {
 func export(w http.ResponseWriter, r *http.Request) *CustomError {
 	cookie, err := r.Cookie("instaexport")
 	if err != nil {
-		return &CustomError{err, "Can't read cookies. Did you disable it?", 500}
+		return &CustomError{err, "Can't read cookies. Did you turn it off?", 500}
 	}
 
 	w.Header().Set("Content-Disposition", "attachment; filename=instaexport.zip")
@@ -233,7 +202,7 @@ type Process struct {
 }
 
 func NewProcess(oauth Token) *Process {
-	return &Process {
+	return &Process{
 		user:  oauth.User.Username,
 		token: oauth.AccessToken,
 
@@ -244,7 +213,7 @@ func NewProcess(oauth Token) *Process {
 }
 
 func run(p *Process) {
-	prepare(p)
+	go prepare(p)
 	fetch(p)
 	report(p)
 	download(p)
@@ -310,7 +279,6 @@ func download(p *Process) {
 	// if we run out of token, the method will block until it can borrow
 	for i, url := range p.urls {
 		go func(src, dest string) {
-
 			<-bucket
 			defer func() { bucket <- true }()
 			grab(src, dest)
@@ -326,8 +294,7 @@ func download(p *Process) {
 }
 
 func done(p *Process) {
-	mark := filepath.Join(download_path, p.token + "-done")
-	os.OpenFile(mark, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
+	os.OpenFile(p.path+"-done", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 }
 
 func kill(p *Process) {
@@ -342,12 +309,11 @@ func grab(src, dest string) {
 	}
 
 	fmt.Println("downloading: ", src)
-	
-	httpClient := createHttpClient()
+
 	request, err := http.NewRequest("GET", src, nil)
 	request.Header.Add("User-Agent", "Instaexport -- export your liked pictures on instagram")
-	
-	response, err := httpClient.Do(request)
+
+	response, err := (&http.Client{}).Do(request)
 	if err != nil {
 		return
 	}
