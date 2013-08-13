@@ -1,0 +1,4 @@
+instaexport -- download your favorite pictures on Instagram
+	index.html	// => client_id and redirect_url
+	main.go		// => modify the constants if needed
+	nginx.conf	// => sample nginx config

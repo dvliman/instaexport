@@ -21,7 +21,7 @@ const (
 	client_id     = "222c75b62b6c4a0b8b789cbaebf75375"
 	client_secret = "589eaa6bc7704eb7add52fcd229c463e"
 
-	redirect_url  = "http://localhost:9999/callback"
+	redirect_url  = "http://dvliman.asuscomm.com:4567/callback"
 	download_path = "/tmp/instaexport/"
 
 	access_token_url = "https://api.instagram.com/oauth/access_token"
@@ -69,7 +69,7 @@ func main() {
 	http.Handle("/export", Handler(export))
 	http.Handle("/status", Handler(status))
 	http.Handle("/callback", Handler(callback))
-	log.Fatal(http.ListenAndServe(":9999", nil))
+	log.Fatal(http.ListenAndServe(":4567", nil))
 }
 
 func root(w http.ResponseWriter, r *http.Request) *CustomError {
@@ -109,12 +109,12 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 func status(w http.ResponseWriter, r *http.Request) *CustomError {
 	cookie, err := r.Cookie("instaexport")
 	if err != nil {
-		return &CustomError{err, "Can't read cookie. Enable it?", 500}
+		return &CustomError{err, "Please enable cookie on this website", 500}
 	}
 
 	check := filepath.Join(download_path, cookie.Value+"-done")
 	f, err := os.Stat(check)
-	if f != nil { // why can't I ignore os.FileInfo?
+	if f != nil {
 	}
 	if err == nil {
 		fmt.Fprintf(w, "OK")
@@ -128,24 +128,21 @@ func status(w http.ResponseWriter, r *http.Request) *CustomError {
 func export(w http.ResponseWriter, r *http.Request) *CustomError {
 	cookie, err := r.Cookie("instaexport")
 	if err != nil {
-		return &CustomError{err, "Can't read cookies. Did you turn it off?", 500}
+		return &CustomError{err, "Please enable cookie on this website", 500}
 	}
 
 	w.Header().Set("Content-Disposition", "attachment; filename=instaexport.zip")
 	w.Header().Set("Content-Type", "application/zip")
 	w.WriteHeader(200)
 
-	zw := zip.NewWriter(w)
-	defer zw.Close()
-
 	target := filepath.Join(download_path, cookie.Value)
-	files, _ := ioutil.ReadDir(target)
-	for _, f := range files {
-		if err := archive(zw, f.Name()); err != nil {
-			return &CustomError{err, "failed to zip. try again?", 500}
-		}
+	err = archive(w, target)
+	if err != nil {
+		return &CustomError{err, "Failed to archive your photos", 500}
 	}
 
+	go os.RemoveAll(target)
+	go os.RemoveAll(target+"-done")
 	return nil
 }
 
@@ -213,10 +210,16 @@ func NewProcess(oauth Token) *Process {
 }
 
 func run(p *Process) {
+	log.Println("INFO: preparing download path")
 	go prepare(p)
+
+	log.Println("INFO: fetching the API")
 	fetch(p)
-	report(p)
+
+	log.Println("INFO: downloading the pictures")
 	download(p)
+
+	log.Println("INFO: marking download done")
 	done(p)
 }
 
@@ -235,10 +238,9 @@ func fetch(p *Process) {
 		p.last = fmt.Sprintf(media_liked_url+"?access_token=%s", p.token)
 	}
 
-	log.Println("fetching: ", p.last)
 	resp, err := http.Get(p.last)
 	if err != nil {
-		log.Println(err)
+		log.Println("WARNING: fetching API - %s", err.Error())
 	}
 
 	var api APIResponse
@@ -255,33 +257,27 @@ func fetch(p *Process) {
 	}
 }
 
-func report(p *Process) {
-	log.Println("username   : ", p.user)
-	log.Println("destination: ", p.path)
-	log.Println("image count: ", len(p.urls))
-}
-
 // it is very cheap to create goroutines that
 // we quickly run out of file descriptors.
-// use rolling bucket to preserve some fd(s)
+// use rolling bucket to preserve some fd
 func download(p *Process) {
 	var wg sync.WaitGroup
 	wg.Add(len(p.urls))
 
-	// prefill bucket with 100 tokens
-	bucket := make(chan bool, 100)
-	for i := 0; i < 100; i++ {
+	// prefill bucket with 64 tokens
+	bucket := make(chan bool, 64)
+	for i := 0; i < 64; i++ {
 		bucket <- true
 	}
 
 	// borrow one token each time we download. return when download is done
-	// this way, we have a rolling bucket which prevent upper limit 100 concurrent reqs
+	// this way, we have a rolling bucket which prevent upper limit 64 concurrent reqs
 	// if we run out of token, the method will block until it can borrow
 	for i, url := range p.urls {
 		go func(src, dest string) {
 			<-bucket
 			defer func() { bucket <- true }()
-			grab(src, dest)
+			grab(src, dest) // maybe we should use workers pool
 			wg.Done()
 
 			/* rewrite the picture filename so its ordered */
@@ -289,63 +285,76 @@ func download(p *Process) {
 	}
 
 	// block until all downloads are done
-	// can't continue to the next stage of pipeline
+	// can't continue to the next stage
 	wg.Wait()
 }
 
 func done(p *Process) {
 	os.OpenFile(p.path+"-done", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
-}
-
-func kill(p *Process) {
-	os.RemoveAll(p.path)
 	p = nil
 }
 
+// TODO: add timeout on http client. go-httpclient?
 func grab(src, dest string) {
 	file, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
+	defer file.Close()	
 	if err != nil {
+		log.Println("ERROR: opening dest path - %s", err.Error()) 
 		return
 	}
-
-	fmt.Println("downloading: ", src)
 
 	request, err := http.NewRequest("GET", src, nil)
-	request.Header.Add("User-Agent", "Instaexport -- export your liked pictures on instagram")
+	request.Header.Add("User-Agent", "Instaexport.com")
 
 	response, err := (&http.Client{}).Do(request)
+	defer response.Body.Close()
 	if err != nil {
+		log.Println("ERROR: downloading picture - %s", err.Error())
 		return
 	}
 
-	defer file.Close()
-	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		log.Println("ERROR: s3 status code - %d", response.StatusCode)
+		return
+	}
+
 	io.Copy(file, response.Body)
 }
 
-func archive(zipper *zip.Writer, filename string) error {
-	file, err := os.Open(filename)
+func archive(writer http.ResponseWriter, path string) error {
+	zw := zip.NewWriter(writer)
+	defer zw.Close()
+
+	err := filepath.Walk(path, func(current string, info os.FileInfo, _ error) error {
+		if !info.IsDir() {
+
+			file, err := os.Open(current)
+			if err != nil {
+				return err
+			}
+			
+			defer file.Close()
+			stat, err := file.Stat()
+			if err != nil {
+				return err
+			}
+
+			header, err := zip.FileInfoHeader(stat)
+			if err != nil {
+				return err
+			}
+
+			temp, err := zw.CreateHeader(header)
+			if err != nil {
+				return err
+			}
+
+			io.Copy(temp, file)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-
-	header, err := zip.FileInfoHeader(info)
-	if err != nil {
-		return err
-	}
-
-	header.Name = filename
-	writer, err := zipper.CreateHeader(header)
-	if err != nil {
-		return err
-	}
-
-	io.Copy(writer, file)
-	return err
+	return nil
 }
