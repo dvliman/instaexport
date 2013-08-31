@@ -1,4 +1,7 @@
 instaexport -- download your favorite pictures on Instagram
-	index.html	// => client_id and redirect_url
-	main.go		// => modify the constants if needed
-	nginx.conf	// => sample nginx config
+  index.html 	// => client_id and redirect_url
+  main.go	// => modify the constants if needed
+  nginx.conf 	// => sample nginx config
+
+  https://api.instagram.com/oauth/authorize/?client_id=222c75b62b6c4a0b8b789cbaebf75375&redirect_uri=http://dvliman.asuscomm.com:4567/callback&response_type=code
+

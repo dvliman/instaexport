@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"runtime"
 )
 
 const (
@@ -33,7 +34,7 @@ type Handler func(http.ResponseWriter, *http.Request) *CustomError
 
 func (fn Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if e := fn(w, r); e != nil {
-		log.Printf("%v", e.Error)
+		log.Printf("ERROR: %v", e.Message)
 		http.Error(w, e.Message, e.Code)
 	}
 }
@@ -59,13 +60,20 @@ func writeCookie(w http.ResponseWriter, oauth Token) {
 	http.SetCookie(w, cookie)
 }
 
-// this server uses combination of cookie and filesystem seek to keep track of
-// the export job. server is stateless and can be launched as multi-processes 
-// backend upstream on a singlebox. filesystem seek is not that expensive on ssd
-func main() {
-	log.Println("-- instaexport started")
+func render(w http.ResponseWriter, file string) {
+	t, _ := template.ParseFiles(file)
+	t.Execute(w, nil)
+}
 
+// this server uses combination of cookie and file seek to keep track of
+// the export job. server is stateless and can be launched as on multiple
+// backend processes on a singlebox. file seek is not that expensive on ssd
+func main() {
+	log.Println("INFO: instaexport started")
+
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	http.Handle("/", Handler(root))
+	http.Handle("/about", Handler(about))
 	http.Handle("/export", Handler(export))
 	http.Handle("/status", Handler(status))
 	http.Handle("/callback", Handler(callback))
@@ -73,8 +81,12 @@ func main() {
 }
 
 func root(w http.ResponseWriter, r *http.Request) *CustomError {
-	t, _ := template.ParseFiles("index.html")
-	t.Execute(w, nil)
+	render(w, "index.html")
+	return nil
+}
+
+func about(w http.ResponseWriter, r *http.Request) *CustomError {
+	render(w, "about.html")
 	return nil
 }
 
@@ -102,13 +114,14 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 	go run(process)
 
 	writeCookie(w, oauth)
-	root(w, r)
+	render(w, "download.html")
 	return nil
 }
 
 func status(w http.ResponseWriter, r *http.Request) *CustomError {
 	cookie, err := r.Cookie("instaexport")
 	if err != nil {
+		// TODO: specify response header and handle that on client side
 		return &CustomError{err, "Please enable cookie on this website", 500}
 	}
 
@@ -136,13 +149,13 @@ func export(w http.ResponseWriter, r *http.Request) *CustomError {
 	w.WriteHeader(200)
 
 	target := filepath.Join(download_path, cookie.Value)
-	err = archive(w, target)
-	if err != nil {
+	e := archive(w, target)
+	if e != nil {
 		return &CustomError{err, "Failed to archive your photos", 500}
 	}
 
 	go os.RemoveAll(target)
-	go os.RemoveAll(target+"-done")
+	go os.RemoveAll(target + "-done")
 	return nil
 }
 
@@ -193,9 +206,9 @@ type Process struct {
 	user  string
 	token string
 
-	path string
-	last string
-	urls []string
+	path string	/* destination folder */
+	last string	/* last image downloaded */
+	urls []string	/* list of images to download */
 }
 
 func NewProcess(oauth Token) *Process {
@@ -225,8 +238,6 @@ func run(p *Process) {
 
 func prepare(p *Process) {
 	p.path = filepath.Join(download_path, p.token)
-
-	// http://en.wikipedia.org/wiki/Umask
 	oldMask := syscall.Umask(0)
 	os.MkdirAll(p.path, os.ModePerm)
 	syscall.Umask(oldMask)
@@ -277,7 +288,7 @@ func download(p *Process) {
 		go func(src, dest string) {
 			<-bucket
 			defer func() { bucket <- true }()
-			grab(src, dest) // maybe we should use workers pool
+			grab(src, dest)
 			wg.Done()
 
 			/* rewrite the picture filename so its ordered */
@@ -294,12 +305,11 @@ func done(p *Process) {
 	p = nil
 }
 
-// TODO: add timeout on http client. go-httpclient?
 func grab(src, dest string) {
 	file, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
-	defer file.Close()	
+	defer file.Close()
 	if err != nil {
-		log.Println("ERROR: opening dest path - %s", err.Error()) 
+		log.Println("ERROR: opening dest path - %s", err.Error())
 		return
 	}
 
@@ -332,7 +342,7 @@ func archive(writer http.ResponseWriter, path string) error {
 			if err != nil {
 				return err
 			}
-			
+
 			defer file.Close()
 			stat, err := file.Stat()
 			if err != nil {
