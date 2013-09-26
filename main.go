@@ -22,7 +22,7 @@ const (
 	client_id     = "222c75b62b6c4a0b8b789cbaebf75375"
 	client_secret = "589eaa6bc7704eb7add52fcd229c463e"
 
-	redirect_url  = "http://dvliman.asuscomm.com:4567/callback"
+	redirect_url  = "http://localhost:4567/callback"
 	download_path = "/tmp/instaexport/"
 
 	access_token_url = "https://api.instagram.com/oauth/access_token"
@@ -60,11 +60,6 @@ func writeCookie(w http.ResponseWriter, oauth Token) {
 	http.SetCookie(w, cookie)
 }
 
-func render(w http.ResponseWriter, file string) {
-	t, _ := template.ParseFiles(file)
-	t.Execute(w, nil)
-}
-
 // this server uses combination of cookie and file seek to keep track of
 // the export job. server is stateless and can be launched as on multiple
 // backend processes on a singlebox. file seek is not that expensive on ssd
@@ -81,12 +76,8 @@ func main() {
 }
 
 func root(w http.ResponseWriter, r *http.Request) *CustomError {
-	render(w, "index.html")
-	return nil
-}
-
-func about(w http.ResponseWriter, r *http.Request) *CustomError {
-	render(w, "about.html")
+	t, _ := template.ParseFiles("index.html")
+	t.Execute(w, nil)
 	return nil
 }
 
@@ -114,7 +105,7 @@ func callback(w http.ResponseWriter, r *http.Request) *CustomError {
 	go run(process)
 
 	writeCookie(w, oauth)
-	render(w, "download.html")
+	root(w, r)
 	return nil
 }
 
@@ -251,7 +242,7 @@ func fetch(p *Process) {
 
 	resp, err := http.Get(p.last)
 	if err != nil {
-		log.Println("WARNING: fetching API - %s", err.Error())
+		log.Println("WARN: fetching API - %s", err.Error())
 	}
 
 	var api APIResponse
