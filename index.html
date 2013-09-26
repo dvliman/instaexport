@@ -102,14 +102,35 @@
             }
 
             function wait() {
-                $('<h1>', {
-                    class: 'text-box-head',
-                    text: 'Download all your liked photos in Instagram in one-click?'
+                $('<p>', {
+                    text: 'We are preparing your download. When it is done, the download will start automatically'
                 }).appendTo($("#content"));
             }
 
             function loop() {
+                window.timer = setInterval(function() {
+                    $.get('/status', function(response) {
+                      if (response == "OK") {
+                        // use iframe to do the GET request
+                        console.debug("INFO: iframe GET request")
+                        $("<iframe>")
+                        .attr('id', 'myframe')
+                        .prop("src", '/export')
+                        .hide()
+                        .appendTo("body");
 
+                        // only clear cookie and interval
+                        // if we have the iframe in the dom
+                        if ($("#myframe").length != 0) {
+                            console.debug("INFO: clear cookie");
+                            $.removeCookie('instaexport');
+
+                            console.debug("INFO: clear interval")
+                            clearInterval(window.timer);
+                        }
+                      }
+                    })
+                }, 1000);
             }
         });
     </script>

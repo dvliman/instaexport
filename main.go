@@ -68,7 +68,6 @@ func main() {
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	http.Handle("/", Handler(root))
-	http.Handle("/about", Handler(about))
 	http.Handle("/export", Handler(export))
 	http.Handle("/status", Handler(status))
 	http.Handle("/callback", Handler(callback))
@@ -297,6 +296,11 @@ func done(p *Process) {
 }
 
 func grab(src, dest string) {
+	// if file exists, skip this download
+	if _, err := os.Stat(dest); err == nil {
+		return
+	}
+
 	file, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
 	defer file.Close()
 	if err != nil {
