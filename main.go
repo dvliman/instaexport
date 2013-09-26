@@ -75,6 +75,7 @@ func main() {
 }
 
 func root(w http.ResponseWriter, r *http.Request) *CustomError {
+	log.Println("INFO: serving request")
 	t, _ := template.ParseFiles("index.html")
 	t.Execute(w, nil)
 	return nil
