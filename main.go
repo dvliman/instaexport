@@ -22,7 +22,7 @@ const (
 	client_id     = "222c75b62b6c4a0b8b789cbaebf75375"
 	client_secret = "589eaa6bc7704eb7add52fcd229c463e"
 
-	redirect_url  = "http://localhost:4567/callback"
+	redirect_url  = "http://instaexport.com/callback"
 	download_path = "/tmp/instaexport/"
 
 	access_token_url = "https://api.instagram.com/oauth/access_token"
